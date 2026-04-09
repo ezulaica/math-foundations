@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🧲 El Imán de Números — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0d0d2b;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🧲  El Imán de Números  —  Phaser 3.60
+   TEKS 1.3 · Suma y Resta — Familias de Operaciones
+   ============================================================ */
+
+const W = 480, H = 640;
+
+// ─── Palette ────────────────────────────────────────────────
+const COLORS = {
+  bg1:   0x0d0d2b, bg2:   0x1a1040,
+  tile:  [0xe74c3c, 0x3498db, 0x2ecc71, 0xf39c12,
+          0x9b59b6, 0x1abc9c, 0xe67e22, 0xe91e63],
+  gold:  0xFFD700, white: 0xffffff,
+  green: 0x00e676, red:   0xff5252,
+  magnetBg:  0x0a103a,
+  magnetRim: 0x4466ff,
+};
+
+// ─── Helpers ────────────────────────────────────────────────
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+const rndF = (a, b) => Phaser.Math.FloatBetween(a, b);
+const dist = (x1,y1,x2,y2) => Phaser.Math.Distance.Between(x1,y1,x2,y2);
+const shuffle = arr => Phaser.Utils.Array.Shuffle(arr);
+
+// ══════════════════════════════════════════════════════════════
+//  SCENE: Game
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score      = 0;
+    this.level      = 1;
+    this.target     = 10;
+    this.tiles      = [];       // array of TileData objects
+    this.selected   = null;     // currently tapped TileData
+    this.dragging   = false;
+    this.mx         = W / 2;    // magnet center X
+    this.my         = 208;      // magnet center Y
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildBackground();
+    this._buildMagnet();
+    this._buildHUD();
+    this._hookDragEvents();
+    this._startRound();
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  BACKGROUND
+  // ──────────────────────────────────────────────────────────
+  _buildBackground() {
+    // Gradient sky via scanlines
+    const g = this.add.graphics();
+    for (let y = 0; y < H; y++) {
+      const t = y / H;
+      const r = Math.round(Phaser.Math.Linear(13, 25, t));
+      const gg = Math.round(Phaser.Math.Linear(13, 14, t));
+      const b  = Math.round(Phaser.Math.Linear(43, 65, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Stars with twinkling
+    for (let i = 0; i < 90; i++) {
+      const s = this.add.circle(
+        rnd(0, W), rnd(0, Math.floor(H * 0.8)),
+        rndF(0.5, 2.2),
+        COLORS.white, rndF(0.4, 1)
+      );
+      this.tweens.add({
+        targets: s,
+        alpha: 0.05,
+        duration: rnd(700, 2800),
+        yoyo: true, repeat: -1,
+        delay: rnd(0, 2500)
+      });
+    }
+
+    // Subtle nebula clouds
+    const nb = this.add.graphics();
+    [[80,120,0x331155],[360,200,0x112244],[200,520,0x001133]]
+      .forEach(([nx,ny,nc]) => {
+        for (let r = 90; r > 0; r -= 6) {
+          nb.fillStyle(nc, 0.012);
+          nb.fillCircle(nx, ny, r);
+        }
+      });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  MAGNET
+  // ──────────────────────────────────────────────────────────
+  _buildMagnet() {
+    const { mx, my } = this;
+
+    // Outer pulse ring (always animating)
+    this._pulseRing = this.add.circle(mx, my, 95, COLORS.magnetRim, 0.12);
+    this.tweens.add({
+      targets: this._pulseRing,
+      scaleX: 1.35, scaleY: 1.35, alpha: 0,
+      duration: 1600, repeat: -1, ease: 'Sine.easeOut'
+    });
+
+    // Secondary glow ring
+    this._glowRing = this.add.circle(mx, my, 95, COLORS.magnetRim, 0.06);
+    this.tweens.add({
+      targets: this._glowRing,
+      scaleX: 1.18, scaleY: 1.18, alpha: 0,
+      duration: 1600, repeat: -1, delay: 800, ease: 'Sine.easeOut'
+    });
+
+    // Draw static magnet body
+    const g = this.add.graphics();
+    // Soft aura layers
+    for (let r = 92; r > 74; r -= 2) {
+      g.fillStyle(COLORS.magnetRim, (92 - r) * 0.009);
+      g.fillCircle(mx, my, r);
+    }
+    // Body fill
+    g.fillStyle(COLORS.magnetBg, 1);
+    g.fillCircle(mx, my, 74);
+    // Outer rim
+    g.lineStyle(5, COLORS.magnetRim, 0.9);
+    g.strokeCircle(mx, my, 74);
+    // Inner decorative ring
+    g.lineStyle(1.5, 0x6688ff, 0.35);
+    g.strokeCircle(mx, my, 60);
+    // Tiny dots on rim
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      g.fillStyle(0x6688ff, 0.5);
+      g.fillCircle(mx + Math.cos(a) * 74, my + Math.sin(a) * 74, 2.5);
+    }
+
+    // ── Horseshoe magnet drawing ──
+    // Grey bar (top connector)
+    g.lineStyle(10, 0x999999, 1);
+    g.lineBetween(mx - 20, my - 12, mx + 20, my - 12);
+    // Red left arm
+    g.lineStyle(10, 0xcc1111, 1);
+    g.beginPath();
+    g.arc(mx - 20, my + 10, 22, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(0), false);
+    g.strokePath();
+    // Blue right arm
+    g.lineStyle(10, 0x1111cc, 1);
+    g.beginPath();
+    g.arc(mx + 20, my + 10, 22, Phaser.Math.DegToRad(180), Phaser.Math.DegToRad(0), false);
+    g.strokePath();
+    // Red tip
+    g.fillStyle(0xff2222, 1); g.fillRect(mx - 31, my + 26, 18, 12);
+    // Blue tip
+    g.fillStyle(0x2222ff, 1); g.fillRect(mx + 13, my + 26, 18, 12);
+
+    // Target number
+    this._targetTxt = this.add.text(mx, my - 34, '10', {
+      fontSize: '48px', fontFamily: 'Arial Black, Impact, sans-serif',
+      color: '#ffffff', stroke: '#000022', strokeThickness: 7
+    }).setOrigin(0.5).setDepth(2);
+
+    // TEKS badge
+    const badge = this.add.graphics().setDepth(2);
+    badge.fillStyle(0x000000, 0.45);
+    badge.fillRoundedRect(mx - 62, my + 52, 124, 20, 5);
+    this.add.text(mx, my + 62, 'TEKS 1.3 · Suma y Resta', {
+      fontSize: '10px', fontFamily: 'Arial, sans-serif', color: '#8899dd'
+    }).setOrigin(0.5).setDepth(3);
+
+    // Store magnet graphics ref for pulse animation
+    this._magnetG = g;
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  HUD
+  // ──────────────────────────────────────────────────────────
+  _buildHUD() {
+    // Score pill
+    const sg = this.add.graphics();
+    sg.fillStyle(0x000000, 0.45);
+    sg.fillRoundedRect(8, 8, 130, 40, 10);
+    this._scoreTxt = this.add.text(20, 14, '⭐  0', {
+      fontSize: '19px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    });
+
+    // Level pill
+    const lg = this.add.graphics();
+    lg.fillStyle(0x000000, 0.45);
+    lg.fillRoundedRect(W - 138, 8, 130, 40, 10);
+    this._levelTxt = this.add.text(W - 126, 14, '🎯  Nivel 1', {
+      fontSize: '16px', fontFamily: 'Arial Black, sans-serif', color: '#aaddff'
+    });
+
+    // Title
+    this.add.text(W / 2, 58, '🧲  El Imán de Números', {
+      fontSize: '14px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setAlpha(0.85);
+
+    // Instruction
+    this._instrTxt = this.add.text(W / 2, 298, 'Arrastra o toca parejas que sumen:', {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#99aacc', align: 'center'
+    }).setOrigin(0.5);
+
+    this._hintNum = this.add.text(W / 2, 314, '10', {
+      fontSize: '22px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setOrigin(0.5);
+
+    // Feedback (hidden)
+    this._feedbackTxt = this.add.text(W / 2, 336, '', {
+      fontSize: '17px', fontFamily: 'Arial Black, sans-serif',
+      color: '#00e676', stroke: '#000000', strokeThickness: 4, align: 'center'
+    }).setOrigin(0.5).setAlpha(0).setDepth(10);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  DRAG / INPUT EVENTS
+  // ──────────────────────────────────────────────────────────
+  _hookDragEvents() {
+    this.input.on('dragstart', (ptr, go) => {
+      this.dragging = true;
+      go.setDepth(30);
+      this.tweens.add({ targets: go, scaleX: 1.15, scaleY: 1.15, duration: 80 });
+    });
+
+    this.input.on('drag', (ptr, go, dx, dy) => {
+      go.x = dx; go.y = dy;
+    });
+
+    this.input.on('dragend', (ptr, go) => {
+      go.setDepth(2);
+      this.tweens.add({ targets: go, scaleX: 1, scaleY: 1, duration: 100 });
+      this._handleDrop(go);
+      this.time.delayedCall(30, () => { this.dragging = false; });
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  ROUND MANAGEMENT
+  // ──────────────────────────────────────────────────────────
+  _startRound() {
+    // Destroy old tiles
+    this.tiles.forEach(td => td.container?.destroy());
+    this.tiles    = [];
+    this.selected = null;
+
+    // Pick target
+    const pool = [5,6,7,8,9,10,11,12,13,14,15];
+    this.target = Phaser.Utils.Array.GetRandom(pool);
+    this._targetTxt.setText('' + this.target);
+    this._hintNum.setText('' + this.target);
+
+    // Build numbers & spawn
+    this._spawnTiles(this._buildPool(this.target));
+  }
+
+  _buildPool(t) {
+    const used = new Set(), pool = [];
+    let tries = 0;
+    while (pool.length < 6 && tries++ < 100) {
+      const a = rnd(1, t - 1), b = t - a;
+      if (a > 0 && b > 0 && !used.has(a) && !used.has(b)) {
+        pool.push(a, b); used.add(a); used.add(b);
+      }
+    }
+    // Distractors (no accidental pairs)
+    let dc = 0; tries = 0;
+    while (dc < 2 && tries++ < 60) {
+      const d = rnd(1, Math.max(t - 1, 2));
+      if (!used.has(d) && !used.has(t - d)) {
+        pool.push(d); used.add(d); dc++;
+      }
+    }
+    return shuffle(pool);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  TILE SPAWNING
+  // ──────────────────────────────────────────────────────────
+  _spawnTiles(numbers) {
+    const TW = 66, TH = 66;
+    const cols = 4;
+    const padX = 18;
+    const stepX = (W - padX * 2) / cols;
+    const startY = 376;
+    const stepY = 82;
+
+    numbers.forEach((num, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const hx  = padX + stepX * col + stepX / 2;
+      const hy  = startY + row * stepY;
+      const clr = COLORS.tile[i % COLORS.tile.length];
+
+      // Container
+      const con = this.add.container(hx, hy).setDepth(2);
+
+      // Shadow
+      con.add(this.add.rectangle(3, 5, TW, TH, 0x000000, 0.35).setOrigin(0.5));
+
+      // Tile bg
+      const bg = this.add.rectangle(0, 0, TW, TH, clr).setOrigin(0.5);
+      bg.setStrokeStyle(3, 0xffffff, 0.35);
+      con.add(bg);
+
+      // Shine
+      const shine = this.add.rectangle(-13, -17, 26, 9, COLORS.white, 0.22).setOrigin(0.5);
+      shine.setAngle(-14);
+      con.add(shine);
+
+      // Number
+      const numTxt = this.add.text(0, 0, '' + num, {
+        fontSize: '28px', fontFamily: 'Arial Black, Impact, sans-serif',
+        color: '#ffffff', stroke: '#000000', strokeThickness: 3
+      }).setOrigin(0.5);
+      con.add(numTxt);
+
+      // Interactivity
+      con.setSize(TW, TH);
+      con.setInteractive({ draggable: true });
+
+      // TileData
+      const td = { value: num, container: con, bg, clr, matched: false, selected: false, hx, hy };
+      this.tiles.push(td);
+      con._td = td;
+
+      // Hover glow
+      con.on('pointerover',  () => { if (!td.matched) bg.setFillStyle(this._lighten(clr)); });
+      con.on('pointerout',   () => { if (!td.matched && !td.selected) bg.setFillStyle(clr); });
+
+      // Tap detection on pointerup
+      con.on('pointerup', ptr => {
+        const moved = dist(ptr.downX, ptr.downY, ptr.x, ptr.y);
+        if (moved < 14 && !this.dragging) this._handleTap(td);
+      });
+
+      // Entrance animation (cascade)
+      con.setAlpha(0).setScale(0.4);
+      this.tweens.add({
+        targets: con, alpha: 1, scaleX: 1, scaleY: 1,
+        duration: 240, delay: i * 55, ease: 'Back.easeOut'
+      });
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  INTERACTION HANDLERS
+  // ──────────────────────────────────────────────────────────
+  _handleTap(td) {
+    if (td.matched) return;
+
+    if (!this.selected) {
+      this._select(td);
+    } else if (this.selected === td) {
+      this._deselect(td);
+    } else {
+      if (this.selected.value + td.value === this.target) {
+        this._matchPair(this.selected, td);
+      } else {
+        this._shake(this.selected.container);
+        this._shake(td.container);
+        this._showFeedback(`${this.selected.value} + ${td.value} ≠ ${this.target}`, false);
+        this._deselect(this.selected);
+      }
+    }
+  }
+
+  _select(td) {
+    this.selected = td;
+    td.selected   = true;
+    td.bg.setStrokeStyle(4, COLORS.gold, 1);
+    td.bg.setFillStyle(this._lighten(td.clr));
+    this.tweens.add({ targets: td.container, scaleX: 1.12, scaleY: 1.12, duration: 130 });
+  }
+
+  _deselect(td) {
+    if (!td) return;
+    td.selected = false;
+    td.bg.setStrokeStyle(3, COLORS.white, 0.35);
+    td.bg.setFillStyle(td.clr);
+    this.tweens.add({ targets: td.container, scaleX: 1, scaleY: 1, duration: 120 });
+    if (this.selected === td) this.selected = null;
+  }
+
+  _handleDrop(con) {
+    const td = con._td;
+    if (!td || td.matched) return;
+
+    if (dist(con.x, con.y, this.mx, this.my) < 105) {
+      const partner = this.tiles.find(t =>
+        t.value === this.target - td.value && !t.matched && t !== td
+      );
+      if (partner) { this._matchPair(td, partner); return; }
+    }
+    // Snap back
+    this.tweens.add({
+      targets: con, x: td.hx, y: td.hy, scaleX: 1, scaleY: 1,
+      duration: 380, ease: 'Back.easeOut'
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  MATCH PAIR
+  // ──────────────────────────────────────────────────────────
+  _matchPair(tdA, tdB) {
+    tdA.matched = true; tdB.matched = true;
+    this.selected = null;
+
+    this.score += 10;
+    this._scoreTxt.setText('⭐  ' + this.score);
+
+    const { mx, my } = this;
+
+    [tdA, tdB].forEach((td, i) => {
+      this.tweens.add({
+        targets: td.container,
+        x: mx + (i === 0 ? -32 : 32), y: my,
+        scaleX: 0.35, scaleY: 0.35, alpha: 0,
+        duration: 500, ease: 'Power2.easeIn',
+        onComplete: () => td.container.destroy()
+      });
+    });
+
+    this._burstParticles(mx, my);
+    this._pulseMagnet();
+    this._showFeedback(`${tdA.value} + ${tdB.value} = ${this.target}  ✓`, true);
+
+    // Check round complete
+    this.time.delayedCall(600, () => {
+      if (this.tiles.every(t => t.matched)) {
+        this.time.delayedCall(700, () => this._nextLevel());
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  NEXT LEVEL
+  // ──────────────────────────────────────────────────────────
+  _nextLevel() {
+    this.level++;
+    this._levelTxt.setText('🎯  Nivel ' + this.level);
+
+    const flash = this.add.rectangle(W/2, H/2, W, H, COLORS.white, 0.85).setDepth(50);
+    const ann   = this.add.text(W/2, H/2, `¡Nivel ${this.level}!`, {
+      fontSize: '52px', fontFamily: 'Arial Black, sans-serif',
+      color: '#FFD700', stroke: '#000000', strokeThickness: 7
+    }).setOrigin(0.5).setDepth(51).setAlpha(0);
+
+    this.tweens.add({ targets: ann,   alpha: 1, duration: 180 });
+    this.tweens.add({
+      targets: [flash, ann], alpha: 0, duration: 600, delay: 350,
+      onComplete: () => { flash.destroy(); ann.destroy(); this._startRound(); }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  FX HELPERS
+  // ──────────────────────────────────────────────────────────
+  _pulseMagnet() {
+    this.tweens.add({
+      targets: this._targetTxt,
+      scaleX: 1.28, scaleY: 1.28, duration: 160, yoyo: true, ease: 'Sine.easeOut'
+    });
+    this.tweens.add({
+      targets: this._pulseRing,
+      scaleX: 1.6, scaleY: 1.6, alpha: 0.5,
+      duration: 200, yoyo: true, ease: 'Sine.easeOut'
+    });
+  }
+
+  _burstParticles(x, y) {
+    const palettes = [
+      [0xFFD700, 0xFF6B6B, 0x4ECDC4, 0x96E6A1, 0xA8E6CF, 0xFFAFCC, 0x6BCEFF, 0xFFC8A2]
+    ];
+    const pal = palettes[0];
+    for (let i = 0; i < 18; i++) {
+      const c = pal[i % pal.length];
+      const sz = rnd(4, 11);
+      const p  = this.add.circle(x, y, sz, c).setDepth(15);
+      const a  = (i / 18) * Math.PI * 2;
+      const sp = rnd(55, 140);
+      this.tweens.add({
+        targets: p,
+        x: x + Math.cos(a) * sp, y: y + Math.sin(a) * sp,
+        alpha: 0, scaleX: 0, scaleY: 0,
+        duration: rnd(380, 680), ease: 'Power2.easeOut',
+        onComplete: () => p.destroy()
+      });
+    }
+    // Ring flash
+    for (let i = 0; i < 6; i++) {
+      const ring = this.add.circle(x, y, 1, COLORS.gold, 0.7).setDepth(14);
+      this.tweens.add({
+        targets: ring, scaleX: rnd(4,8), scaleY: rnd(4,8), alpha: 0,
+        duration: rnd(300, 500), delay: i * 40, ease: 'Power1.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+  }
+
+  _shake(obj) {
+    const ox = obj.x;
+    this.tweens.add({
+      targets: obj, x: { from: ox - 9, to: ox + 9 },
+      duration: 48, yoyo: true, repeat: 4, ease: 'Sine.easeInOut',
+      onComplete: () => { obj.x = ox; }
+    });
+  }
+
+  _showFeedback(msg, ok) {
+    this._feedbackTxt.setText(msg)
+      .setColor(ok ? '#00e676' : '#ff5252')
+      .setAlpha(1).setScale(1.18);
+    this.tweens.add({
+      targets: this._feedbackTxt,
+      scaleX: 1, scaleY: 1, alpha: 0,
+      duration: ok ? 1700 : 1300, delay: ok ? 380 : 80,
+      ease: 'Sine.easeIn'
+    });
+  }
+
+  _lighten(hex) {
+    return Phaser.Display.Color.IntegerToColor(hex).lighten(18).color;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Phaser Config
+// ══════════════════════════════════════════════════════════════
+const config = {
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#0d0d2b',
+  scene: [GameScene],
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
+  input: { touch: { capture: true } }
+};
+
+new Phaser.Game(config);
+</script>
+</body>
+</html>
