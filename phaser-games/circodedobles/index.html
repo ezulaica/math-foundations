@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🎪 El Circo de los Dobles — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #fff8e1;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🎪  El Circo de los Dobles  —  Phaser 3.60
+   TEKS 1.3 · Dobles y Casi Dobles
+   Tarjetas de circo cara abajo. Al tocarlas se revelan y el
+   estudiante completa la ecuación de doble o casi doble.
+   Fase 1: Dobles (1+1 → 9+9)  |  Fase 2: Casi Dobles (n+n+1)
+   ============================================================ */
+
+const W = 480, H = 700;
+
+// ── Card & grid constants ────────────────────────────────────
+const CARD_W      = 104;
+const CARD_H      = 92;
+const COL_COUNT   = 4;
+const PAD_X       = 12;
+const COL_STEP    = (W - PAD_X * 2) / COL_COUNT;  // 114 px
+const ROW_STEP    = 102;
+const GRID_TOP    = 100;
+const PANEL_H     = 258;
+const PANEL_OPEN  = H - PANEL_H;                   // 442
+
+// ── Animals (10 circus animals, one per base number 1-9 + spare) ──
+const ANIMALS = ['🦁','🐘','🐯','🐧','🦒','🦓','🐬','🦜','🐻','🦊'];
+
+// ── Colours ──────────────────────────────────────────────────
+const C = {
+  bgTop: 0xFFF8E1, bgBot: 0xFFE0B2,
+  stripeR: 0xD32F2F, stripeY: 0xFDD835,
+  coverBg: 0xC62828, coverHi: 0xFF8A80,
+  questBg: 0xFFF9C4, questBrd: 0xF57C00,
+  solvedBg: 0x2E7D32, solvedHi: 0x81C784,
+  togActive: 0xC62828, togInact: 0xFFCDD2,
+  btnRed: 0xB71C1C, btnRedH: 0xD32F2F,
+  btnDism: 0x757575,
+  gold: 0xFFD700, green: 0x00E676, red: 0xFF5252,
+  white: 0xffffff, dark: 0x212121,
+  panelBg: 0x1C0000,
+};
+
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+const rndF = (a, b) => Phaser.Math.FloatBetween(a, b);
+
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score       = 0;
+    this.phase       = 'doubles';   // 'doubles' | 'nearDoubles'
+    this.cards       = [];          // array of card-data objects
+    this.activeCard  = null;        // currently flipped card
+    this.choices     = [];
+    this.isLocked    = false;
+    this.cardGfxRefs = [];          // for cleanup on phase switch
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildBg();
+    this._buildHUD();
+    this._buildPhaseToggle();
+    this._buildSlidePanel();
+    this._buildPhase();
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BACKGROUND  — warm circus gradient + tent stripes + bunting
+  // ══════════════════════════════════════════════════════════
+  _buildBg() {
+    // Warm gradient fill (scanlines)
+    const g = this.add.graphics().setDepth(0);
+    for (let y = 0; y < H; y++) {
+      const t = y / H;
+      const r  = Math.round(Phaser.Math.Linear(255, 255, t));
+      const gg = Math.round(Phaser.Math.Linear(248, 224, t));
+      const b  = Math.round(Phaser.Math.Linear(225, 178, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Vertical stripe pattern (very subtle, full height)
+    const sg = this.add.graphics().setDepth(0);
+    const stripeW = 22;
+    for (let x = 0; x < W; x += stripeW * 2) {
+      sg.fillStyle(0xFFCCBC, 0.14);
+      sg.fillRect(x, 0, stripeW, H);
+    }
+
+    // Tent canopy stripes at top (bold)
+    const tg = this.add.graphics().setDepth(1);
+    const canopyH = 12;
+    const sw = 20;
+    for (let x = 0; x < W; x += sw * 2) {
+      tg.fillStyle(C.stripeR, 1); tg.fillRect(x, 0, sw, canopyH);
+    }
+    tg.lineStyle(1.5, 0xb71c1c, 0.5);
+    tg.lineBetween(0, canopyH, W, canopyH);
+
+    // Bunting flags along top
+    const flagW = 28, flagH = 22;
+    const flagColors = [0xE53935, 0xFDD835, 0x1E88E5, 0x43A047, 0xE91E63, 0xFF6F00, 0x7B1FA2];
+    const buntG = this.add.graphics().setDepth(2);
+    // Rope
+    buntG.lineStyle(1.5, 0x8D6E63, 0.7);
+    buntG.lineBetween(0, canopyH + 1, W, canopyH + 1);
+    // Flag triangles
+    for (let i = 0; i * flagW < W + flagW; i++) {
+      const fx = i * flagW;
+      const col = flagColors[i % flagColors.length];
+      buntG.fillStyle(col, 0.9);
+      buntG.fillTriangle(fx, canopyH + 2, fx + flagW / 2, canopyH + 2 + flagH, fx + flagW, canopyH + 2);
+    }
+
+    // Animated circus lights across the top (blinking colored dots)
+    const lightY = canopyH + flagH + 8;
+    const lightColors = [0xFF5252, 0xFFD740, 0x40C4FF, 0x69F0AE, 0xFF80AB, 0xFF6D00];
+    for (let i = 0; i < 14; i++) {
+      const lx = (W / 14) * i + W / 28;
+      const lc = lightColors[i % lightColors.length];
+      const light = this.add.circle(lx, lightY, 5, lc, 1).setDepth(3);
+      // Halo
+      this.add.circle(lx, lightY, 8, lc, 0.15).setDepth(2);
+      // Blink
+      this.tweens.add({
+        targets: light, alpha: 0.12,
+        duration: rnd(250, 500), yoyo: true, repeat: -1, delay: i * 100
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HUD
+  // ══════════════════════════════════════════════════════════
+  _buildHUD() {
+    const g = this.add.graphics().setDepth(10);
+
+    // Score pill
+    g.fillStyle(0xB71C1C, 0.92); g.fillRoundedRect(8, 56, 128, 36, 10);
+    g.lineStyle(1.5, C.gold, 0.7); g.strokeRoundedRect(8, 56, 128, 36, 10);
+    this._scoreTxt = this.add.text(20, 64, '⭐  0', {
+      fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setDepth(11);
+
+    // Solved count pill
+    g.fillStyle(0x4E342E, 0.85); g.fillRoundedRect(W - 136, 56, 128, 36, 10);
+    g.lineStyle(1.5, 0xA1887F, 0.5); g.strokeRoundedRect(W - 136, 56, 128, 36, 10);
+    this._solvedTxt = this.add.text(W - 124, 64, '🎪  0 / 9', {
+      fontSize: '16px', fontFamily: 'Arial Black, sans-serif', color: '#FFCCBC'
+    }).setDepth(11);
+
+    // Title
+    this.add.text(W / 2, 48, '🎪  El Circo de los Dobles', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#B71C1C'
+    }).setOrigin(0.5).setAlpha(0.92).setDepth(11);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PHASE TOGGLE  (Dobles | Casi Dobles)
+  // ══════════════════════════════════════════════════════════
+  _buildPhaseToggle() {
+    const y = 57, h = 34, half = W / 2 - 14;
+    this._toggleG = this.add.graphics().setDepth(10);
+    this._drawToggle();
+
+    // Left button (Dobles)
+    const hitL = this.add.rectangle(14 + half / 2, y + h / 2, half, h)
+      .setInteractive().setDepth(12).setAlpha(0.001);
+    hitL.on('pointerup', () => {
+      if (this.phase !== 'doubles') { this.phase = 'doubles'; this._switchPhase(); }
+    });
+
+    // Right button (Casi Dobles)
+    const hitR = this.add.rectangle(W - 14 - half / 2, y + h / 2, half, h)
+      .setInteractive().setDepth(12).setAlpha(0.001);
+    hitR.on('pointerup', () => {
+      if (this.phase !== 'nearDoubles') { this.phase = 'nearDoubles'; this._switchPhase(); }
+    });
+
+    this._toggleHitL = hitL;
+    this._toggleHitR = hitR;
+  }
+
+  _drawToggle() {
+    const g = this._toggleG;
+    g.clear();
+    const y = 57, h = 34;
+    const half = W / 2 - 14;
+    const isDoubles = this.phase === 'doubles';
+
+    // Left tab (Dobles)
+    g.fillStyle(isDoubles ? C.togActive : C.togInact, 1);
+    g.fillRoundedRect(14, y, half, h, { tl: 10, tr: 0, bl: 10, br: 0 });
+    if (isDoubles) { g.fillStyle(0xffffff, 0.08); g.fillRoundedRect(16, y + 2, half - 4, 10, { tl: 8, tr: 0, bl: 0, br: 0 }); }
+
+    // Right tab (Casi Dobles)
+    g.fillStyle(!isDoubles ? C.togActive : C.togInact, 1);
+    g.fillRoundedRect(W / 2, y, half, h, { tl: 0, tr: 10, bl: 0, br: 10 });
+    if (!isDoubles) { g.fillStyle(0xffffff, 0.08); g.fillRoundedRect(W / 2 + 2, y + 2, half - 4, 10, { tl: 0, tr: 8, bl: 0, br: 0 }); }
+
+    // Divider
+    g.lineStyle(1.5, 0xffffff, 0.35); g.lineBetween(W / 2, y + 4, W / 2, y + h - 4);
+    // Border
+    g.lineStyle(1.5, 0xE57373, 0.5); g.strokeRoundedRect(14, y, W - 28, h, 10);
+  }
+
+  // We need the toggle labels as text objects (created once, stay)
+  _buildToggleLabels() {
+    this._togLabelD = this.add.text(W / 4 + 7, 74, 'Dobles', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(12);
+    this._togLabelN = this.add.text(3 * W / 4 - 7, 74, 'Casi Dobles', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(12);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  SLIDE-UP QUESTION PANEL
+  // ══════════════════════════════════════════════════════════
+  _buildSlidePanel() {
+    // Panel container — starts off-screen below
+    this._panel = this.add.container(0, H).setDepth(30);
+
+    const bg = this.add.graphics();
+    bg.fillStyle(C.panelBg, 0.97);
+    bg.fillRect(0, 0, W, PANEL_H);
+    bg.lineStyle(4, C.stripeR, 0.85);
+    bg.lineBetween(0, 0, W, 0);
+    bg.lineStyle(1.5, 0xFF8A65, 0.45);
+    bg.lineBetween(0, 6, W, 6);
+    // Circus stripe at top of panel
+    for (let x = 0; x < W; x += 18) {
+      bg.fillStyle(0x5D0000, 0.12); bg.fillRect(x, 0, 9, PANEL_H);
+    }
+    this._panel.add(bg);
+
+    // "Elige la respuesta:" label
+    const lbl = this.add.text(W / 2, 14, 'Elige la respuesta:', {
+      fontSize: '12px', fontFamily: 'Arial, sans-serif', color: '#FF8A65'
+    }).setOrigin(0.5);
+    this._panel.add(lbl);
+
+    // Animal emoji display (left group + right group)
+    this._panelAnimal = this.add.text(W / 2, 52, '🦁', {
+      fontSize: '40px'
+    }).setOrigin(0.5);
+    this._panel.add(this._panelAnimal);
+
+    // Equation text (e.g. "3 + 3 = ?")
+    this._panelEq = this.add.text(W / 2, 100, '? + ? = ?', {
+      fontSize: '28px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700',
+      stroke: '#000000', strokeThickness: 4
+    }).setOrigin(0.5);
+    this._panel.add(this._panelEq);
+
+    // 3 choice buttons inside panel
+    const btnW = 116, btnH = 64, gap = 8;
+    const totalBW = 3 * btnW + 2 * gap;
+    const bsx = (W - totalBW) / 2;
+    const bsy = 130;
+
+    this._panelBtns = [];
+    for (let i = 0; i < 3; i++) {
+      const bx = bsx + i * (btnW + gap);
+      const pb = this._makePanelBtn(bx, bsy, btnW, btnH, i);
+      this._panelBtns.push(pb);
+    }
+
+    // Dismiss (×) button
+    const dismG = this.add.graphics();
+    dismG.fillStyle(C.btnDism, 1);
+    dismG.fillRoundedRect(W - 50, 8, 38, 34, 8);
+    this._panel.add(dismG);
+    const dismTxt = this.add.text(W - 31, 25, '×', {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5);
+    this._panel.add(dismTxt);
+    const dismHit = this.add.rectangle(W - 31, 25, 38, 34)
+      .setInteractive().setAlpha(0.001);
+    dismHit.on('pointerup', () => this._closeCard());
+    this._panel.add(dismHit);
+
+    // TEKS label
+    const teks = this.add.text(W / 2, 207, 'TEKS 1.3 · Dobles y Casi Dobles', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#8D6E63'
+    }).setOrigin(0.5);
+    this._panel.add(teks);
+  }
+
+  _makePanelBtn(x, y, w, h, idx) {
+    const base = C.btnRed, hov = C.btnRedH;
+    const g = this.add.graphics();
+
+    const draw = (col, dy = 0) => {
+      g.clear();
+      g.fillStyle(0x000000, 0.35); g.fillRoundedRect(x + 3, y + 5 + dy, w, h, 13);
+      g.fillStyle(col, 1);         g.fillRoundedRect(x, y + dy, w, h, 13);
+      g.fillStyle(0xffffff, 0.13); g.fillRoundedRect(x + 4, y + dy + 4, w - 8, h * 0.35, { tl: 9, tr: 9, bl: 0, br: 0 });
+      // Circus stripe hint
+      g.fillStyle(0xffffff, 0.06);
+      for (let s = 0; s < w; s += 14) g.fillRect(x + s, y + dy, 7, h);
+      g.lineStyle(2, 0xFF8A65, 0.55); g.strokeRoundedRect(x, y + dy, w, h, 13);
+    };
+    draw(base);
+    this._panel.add(g);
+
+    const txt = this.add.text(x + w / 2, y + h / 2, '?', {
+      fontSize: '30px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5);
+    this._panel.add(txt);
+
+    const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h)
+      .setInteractive().setAlpha(0.001);
+    hit.on('pointerover',  () => { if (!this.isLocked) draw(hov); });
+    hit.on('pointerout',   () => draw(base));
+    hit.on('pointerdown',  () => { if (!this.isLocked) draw(hov, 3); });
+    hit.on('pointerup',    () => { draw(base); if (!this.isLocked) this._submitAnswer(this.choices[idx]); });
+    this._panel.add(hit);
+
+    return { g, txt, hit, draw, base };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PHASE / CARD BUILD
+  // ══════════════════════════════════════════════════════════
+  _buildPhase() {
+    // Clear old cards
+    this.cardGfxRefs.forEach(o => o.destroy());
+    this.cardGfxRefs = [];
+    this.cards = [];
+    this.activeCard = null;
+    this.isLocked = false;
+    this._hidePanel(true);
+
+    // Build card data
+    const bases = this.phase === 'doubles'
+      ? Phaser.Utils.Array.Shuffle([1,2,3,4,5,6,7,8,9])
+      : Phaser.Utils.Array.Shuffle([1,2,3,4,5,6,7,8]);
+
+    bases.forEach((base, idx) => {
+      const delta = this.phase === 'doubles' ? 0 : 1;
+      const card = {
+        id:       idx,
+        base,
+        delta,
+        leftNum:  base,
+        rightNum: base + delta,
+        answer:   base + (base + delta),
+        emoji:    ANIMALS[(base - 1) % ANIMALS.length],
+        state:    'cover',   // 'cover' | 'question' | 'solved'
+        isActive: false,
+      };
+      const pos = this._cardPos(idx, bases.length);
+      this._spawnCard(card, pos.x, pos.y);
+      this.cards.push(card);
+    });
+
+    // Staggered entrance
+    this.cards.forEach((card, i) => {
+      card.container.setAlpha(0).setScale(0.5);
+      this.tweens.add({
+        targets: card.container, alpha: 1, scaleX: 1, scaleY: 1,
+        duration: 220, delay: i * 45, ease: 'Back.easeOut'
+      });
+    });
+
+    // Build toggle labels (only once but redraw on phase switch)
+    if (!this._togLabelD) this._buildToggleLabels();
+    this._drawToggle();
+    this._updateSolvedCounter();
+  }
+
+  _cardPos(idx, total) {
+    const row = Math.floor(idx / COL_COUNT);
+    const col = idx % COL_COUNT;
+    // Last lone card → center it
+    if (idx === total - 1 && total % COL_COUNT === 1) {
+      return { x: W / 2, y: GRID_TOP + row * ROW_STEP };
+    }
+    return {
+      x: PAD_X + COL_STEP * col + COL_STEP / 2,
+      y: GRID_TOP + row * ROW_STEP,
+    };
+  }
+
+  _spawnCard(card, x, y) {
+    const con = this.add.container(x, y).setDepth(5).setSize(CARD_W, CARD_H);
+    con.setInteractive();
+    this.cardGfxRefs.push(con);
+
+    // Graphics layer
+    const bg  = this.add.graphics(); this.cardGfxRefs.push(bg);
+    // Three text slots
+    const t1  = this.add.text(0, -14, '', { fontSize: '28px' }).setOrigin(0.5); this.cardGfxRefs.push(t1);
+    const t2  = this.add.text(0,  16, '', { fontSize: '11px', fontFamily: 'Arial Black, sans-serif' }).setOrigin(0.5); this.cardGfxRefs.push(t2);
+    const t3  = this.add.text(0,  31, '', { fontSize: '12px', fontFamily: 'Arial Black, sans-serif' }).setOrigin(0.5); this.cardGfxRefs.push(t3);
+    con.add([bg, t1, t2, t3]);
+
+    card.container = con;
+    card.bg = bg; card.t1 = t1; card.t2 = t2; card.t3 = t3;
+
+    this._drawFace(card);
+
+    // Hover effects
+    con.on('pointerover', () => {
+      if (card.state !== 'solved' && !card.isActive) {
+        this.tweens.add({ targets: con, scaleX: 1.06, scaleY: 1.06, duration: 80 });
+      }
+    });
+    con.on('pointerout', () => {
+      if (!card.isActive) this.tweens.add({ targets: con, scaleX: 1, scaleY: 1, duration: 80 });
+    });
+    con.on('pointerup', () => this._tapCard(card));
+  }
+
+  // ── Draw a card face (cover / question / solved) ────────────
+  _drawFace(card) {
+    const g  = card.bg;
+    const hw = CARD_W / 2, hh = CARD_H / 2;
+    g.clear();
+
+    switch (card.state) {
+      case 'cover':
+        // Red gradient effect
+        g.fillStyle(C.coverBg, 1);
+        g.fillRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        // Shine
+        g.fillStyle(0xffffff, 0.12);
+        g.fillRoundedRect(-hw + 2, -hh + 2, CARD_W - 4, 18, { tl: 10, tr: 10, bl: 0, br: 0 });
+        // Diagonal stripe hint
+        g.lineStyle(1.5, 0xff6659, 0.35);
+        g.lineBetween(-hw + 8, -hh + 8, hw - 8, hh - 8);
+        g.lineBetween(-hw + 20, -hh + 8, hw - 8, hh - 20);
+        // Border
+        g.lineStyle(2.5, C.coverHi, 0.55);
+        g.strokeRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        // Small gold dots (rivets)
+        [[-hw+6,-hh+6],[hw-6,-hh+6],[-hw+6,hh-6],[hw-6,hh-6]].forEach(([dx,dy]) => {
+          g.fillStyle(C.gold, 0.65); g.fillCircle(dx, dy, 3.5);
+        });
+        card.t1.setText('🎪').setFontSize('28px').setAlpha(1);
+        card.t2.setText('?').setColor('#ffffff').setFontSize('16px').setAlpha(0.65);
+        card.t3.setText('').setAlpha(0);
+        break;
+
+      case 'question':
+        g.fillStyle(C.questBg, 1);
+        g.fillRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        g.fillStyle(0xFFE082, 0.5);
+        g.fillRoundedRect(-hw + 2, -hh + 2, CARD_W - 4, 12, { tl: 10, tr: 10, bl: 0, br: 0 });
+        g.lineStyle(3, C.questBrd, 1);
+        g.strokeRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        card.t1.setText(card.emoji).setFontSize('26px').setAlpha(1);
+        card.t2.setText(card.leftNum + ' + ' + card.rightNum).setColor('#E65100').setFontSize('12px').setAlpha(1);
+        card.t3.setText('= ?').setColor('#BF360C').setFontSize('11px').setAlpha(1);
+        break;
+
+      case 'solved':
+        g.fillStyle(C.solvedBg, 1);
+        g.fillRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        g.fillStyle(0x4CAF50, 0.35);
+        g.fillRoundedRect(-hw + 2, -hh + 2, CARD_W - 4, 12, { tl: 10, tr: 10, bl: 0, br: 0 });
+        g.lineStyle(2.5, C.solvedHi, 0.7);
+        g.strokeRoundedRect(-hw, -hh, CARD_W, CARD_H, 12);
+        card.t1.setText(card.emoji).setFontSize('22px').setAlpha(1);
+        card.t2.setText(card.leftNum + '+' + card.rightNum + '=' + card.answer).setColor('#ffffff').setFontSize('11px').setAlpha(1);
+        card.t3.setText('✓').setColor('#A5D6A7').setFontSize('18px').setAlpha(1);
+        break;
+    }
+  }
+
+  // ── Animated flip to new face ────────────────────────────────
+  _flipTo(card, newState, cb) {
+    this.tweens.add({
+      targets: card.container, scaleX: 0,
+      duration: 120, ease: 'Sine.easeIn',
+      onComplete: () => {
+        card.state = newState;
+        this._drawFace(card);
+        this.tweens.add({
+          targets: card.container, scaleX: 1,
+          duration: 120, ease: 'Sine.easeOut',
+          onComplete: () => { if (cb) cb(); }
+        });
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CARD INTERACTION
+  // ══════════════════════════════════════════════════════════
+  _tapCard(card) {
+    if (this.isLocked) return;
+    if (card.state === 'solved') return;
+
+    // Tapping the already-active card → close it
+    if (this.activeCard === card) {
+      this._closeCard();
+      return;
+    }
+
+    // Close any previously open card first
+    if (this.activeCard) {
+      const prev = this.activeCard;
+      prev.isActive = false;
+      this.tweens.add({ targets: prev.container, scaleX: 1, scaleY: 1, duration: 100 });
+      this._flipTo(prev, 'cover');
+    }
+
+    // Open this card
+    card.isActive = true;
+    this.activeCard = card;
+    this._flipTo(card, 'question', () => {
+      this._openPanel(card);
+    });
+
+    // Scale up active card
+    this.tweens.add({ targets: card.container, scaleX: 1.08, scaleY: 1.08, duration: 130 });
+  }
+
+  _closeCard() {
+    if (!this.activeCard) return;
+    const card = this.activeCard;
+    card.isActive = false;
+    this.activeCard = null;
+    this._flipTo(card, 'cover');
+    this.tweens.add({ targets: card.container, scaleX: 1, scaleY: 1, duration: 120 });
+    this._hidePanel();
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PANEL OPEN / CLOSE
+  // ══════════════════════════════════════════════════════════
+  _openPanel(card) {
+    // Populate panel content
+    this._panelAnimal.setText(card.emoji);
+    const opStr = card.delta === 0 ? `${card.leftNum} + ${card.leftNum}` : `${card.leftNum} + ${card.rightNum}`;
+    this._panelEq.setText(opStr + ' = ?');
+
+    // Choices
+    this.choices = this._makeChoices(card.answer);
+    this._panelBtns.forEach((btn, i) => btn.txt.setText('' + this.choices[i]));
+
+    // Slide panel up
+    this.tweens.killTweensOf(this._panel);
+    this.tweens.add({
+      targets: this._panel, y: PANEL_OPEN,
+      duration: 290, ease: 'Power2.easeOut'
+    });
+  }
+
+  _hidePanel(instant = false) {
+    this.tweens.killTweensOf(this._panel);
+    if (instant) {
+      this._panel.y = H;
+      return;
+    }
+    this.tweens.add({
+      targets: this._panel, y: H,
+      duration: 220, ease: 'Power2.easeIn'
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  ANSWER LOGIC
+  // ══════════════════════════════════════════════════════════
+  _makeChoices(correct) {
+    const s = new Set([correct]);
+    let tries = 0;
+    while (s.size < 3 && tries++ < 50) {
+      const off = rnd(1, 4) * (Math.random() < 0.5 ? 1 : -1);
+      const c = correct + off;
+      if (c > 0) s.add(c);
+    }
+    return Phaser.Utils.Array.Shuffle(Array.from(s));
+  }
+
+  _submitAnswer(value) {
+    if (this.isLocked || !this.activeCard) return;
+    this.isLocked = true;
+
+    const card = this.activeCard;
+    if (value === card.answer) {
+      this._onCorrect(card, value);
+    } else {
+      this._onWrong(card);
+    }
+  }
+
+  _onCorrect(card, value) {
+    const pts = this.phase === 'nearDoubles' ? 15 : 10;
+    this.score += pts;
+    this._scoreTxt.setText('⭐  ' + this.score);
+
+    // Panel equation turns green
+    this._panelEq.setText(card.leftNum + ' + ' + card.rightNum + ' = ' + value);
+    this._panelEq.setColor('#00E676');
+
+    // Score pop
+    this._scorePop('+' + pts);
+
+    this._hidePanel();
+    card.isActive = false;
+    this.activeCard = null;
+
+    this.time.delayedCall(240, () => {
+      this._flipTo(card, 'solved', () => {
+        // Star burst on card
+        this._burst(card.container.x, card.container.y);
+        this.tweens.add({ targets: card.container, scaleX: 1, scaleY: 1, duration: 120 });
+        this._updateSolvedCounter();
+        this.isLocked = false;
+
+        const solvedCount = this.cards.filter(c => c.state === 'solved').length;
+        if (solvedCount === this.cards.length) {
+          this.time.delayedCall(500, () => this._showPhaseComplete());
+        }
+      });
+    });
+
+    // Reset panel eq color after showing
+    this.time.delayedCall(500, () => this._panelEq.setColor('#FFD700'));
+  }
+
+  _onWrong(card) {
+    // Shake the panel equation
+    this._shake(this._panelEq);
+    // Red flash
+    const flash = this.add.rectangle(W / 2, H / 2, W, H, C.red, 0.13).setDepth(60);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 350, onComplete: () => flash.destroy() });
+
+    this.time.delayedCall(600, () => {
+      this._hidePanel();
+      card.isActive = false;
+      this.activeCard = null;
+      this._flipTo(card, 'cover', () => {
+        this.tweens.add({ targets: card.container, scaleX: 1, scaleY: 1, duration: 100 });
+      });
+      this.isLocked = false;
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PHASE SWITCH
+  // ══════════════════════════════════════════════════════════
+  _switchPhase() {
+    this.isLocked = true;
+    this._hidePanel(true);
+    // Fade out old cards
+    this.cards.forEach((c, i) => {
+      this.tweens.add({
+        targets: c.container, alpha: 0, scaleX: 0.4, scaleY: 0.4,
+        duration: 180, delay: i * 30,
+        onComplete: () => { if (i === this.cards.length - 1) this._buildPhase(); }
+      });
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PHASE COMPLETE OVERLAY
+  // ══════════════════════════════════════════════════════════
+  _showPhaseComplete() {
+    this._launchConfetti();
+
+    const isDoubles = this.phase === 'doubles';
+    const cardW = 340, cardH = 290;
+    const cardX = (W - cardW) / 2, cardY = (H - cardH) / 2 - 10;
+    const mid = cardX + cardW / 2;
+
+    const refs = [];
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0).setDepth(40);
+    refs.push(dim);
+    this.tweens.add({ targets: dim, fillAlpha: 0.48, duration: 250 });
+
+    const cg = this.add.graphics().setDepth(41).setAlpha(0);
+    refs.push(cg);
+    // Circus card gradient feel
+    cg.fillStyle(0x7F0000, 1); cg.fillRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.fillStyle(0xB71C1C, 0.8); cg.fillRoundedRect(cardX+2, cardY+2, cardW-4, cardH/2, { tl:22, tr:22, bl:0, br:0 });
+    cg.lineStyle(4, C.gold, 0.95); cg.strokeRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.fillStyle(C.gold, 0.06); cg.fillRoundedRect(cardX+2, cardY+2, cardW-4, cardH-4, 22);
+    // Bunting flags on card
+    const fColors = [0xFFD700, 0x40C4FF, 0x69F0AE, 0xFF80AB, 0xFFD700];
+    for (let i = 0; i < 8; i++) {
+      const fx = cardX + 12 + i * (cardW - 24) / 7;
+      cg.fillStyle(fColors[i % fColors.length], 0.8);
+      cg.fillTriangle(fx, cardY + 8, fx + (cardW-24)/14, cardY + 28, fx + (cardW-24)/7, cardY + 8);
+    }
+    this.tweens.add({ targets: cg, alpha: 1, duration: 250 });
+
+    const addT = (x, y, str, style) => {
+      const t = this.add.text(x, y, str, style).setOrigin(0.5).setDepth(42).setAlpha(0);
+      refs.push(t);
+      this.tweens.add({ targets: t, alpha: 1, duration: 200, delay: 200 });
+      return t;
+    };
+
+    let ty = cardY + 38;
+    addT(mid, ty, '🎪', { fontSize: '56px' }); ty += 66;
+    addT(mid, ty, isDoubles ? '¡Dobles Completados!' : '¡Casi Dobles!', {
+      fontSize: '22px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }); ty += 34;
+    addT(mid, ty, 'Puntos: ' + this.score, {
+      fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }); ty += 38;
+
+    // Action button
+    const btnLabel = isDoubles ? '🎠  ¡Casi Dobles! →' : '🔄  Jugar de Nuevo';
+    const btnW2 = 220, btnH2 = 52, btnX2 = mid - btnW2 / 2;
+    const btnCol = isDoubles ? 0xF57C00 : 0x2E7D32;
+    const btnG = this.add.graphics().setDepth(42).setAlpha(0);
+    refs.push(btnG);
+    btnG.fillStyle(btnCol, 1); btnG.fillRoundedRect(btnX2, ty, btnW2, btnH2, 14);
+    btnG.lineStyle(2, C.gold, 0.7); btnG.strokeRoundedRect(btnX2, ty, btnW2, btnH2, 14);
+    this.tweens.add({ targets: btnG, alpha: 1, duration: 200, delay: 250 });
+    addT(mid, ty + btnH2 / 2, btnLabel, {
+      fontSize: '15px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    });
+
+    const hit = this.add.rectangle(mid, ty + btnH2 / 2, btnW2, btnH2)
+      .setInteractive().setDepth(43).setAlpha(0.001);
+    refs.push(hit);
+    hit.on('pointerup', () => {
+      refs.forEach(o => o.destroy());
+      if (isDoubles) {
+        this.phase = 'nearDoubles';
+        this._buildPhase();
+      } else {
+        this.phase = 'doubles';
+        this.score = 0;
+        this._scoreTxt.setText('⭐  0');
+        this._buildPhase();
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HELPERS
+  // ══════════════════════════════════════════════════════════
+  _updateSolvedCounter() {
+    const solved = this.cards.filter(c => c.state === 'solved').length;
+    const total  = this.cards.length;
+    this._solvedTxt.setText('🎪  ' + solved + ' / ' + total);
+  }
+
+  _shake(obj) {
+    const ox = obj.x;
+    this.tweens.add({
+      targets: obj, x: { from: ox - 10, to: ox + 10 },
+      duration: 44, yoyo: true, repeat: 5, ease: 'Sine.easeInOut',
+      onComplete: () => { obj.x = ox; }
+    });
+  }
+
+  _scorePop(label) {
+    const pop = this.add.text(50, 62, label, {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif',
+      color: '#00E676', stroke: '#000000', strokeThickness: 3
+    }).setOrigin(0.5).setDepth(25);
+    this.tweens.add({
+      targets: pop, y: 36, alpha: 0, duration: 900, ease: 'Power2.easeOut',
+      onComplete: () => pop.destroy()
+    });
+  }
+
+  _burst(x, y) {
+    const pal = [C.gold, 0xFF6B6B, 0x40C4FF, 0x69F0AE, 0xFF80AB, 0xFFD740, 0xCE93D8];
+    for (let i = 0; i < 18; i++) {
+      const p = this.add.circle(x, y, rnd(3, 9), pal[i % pal.length]).setDepth(20);
+      const a = (i / 18) * Math.PI * 2, sp = rnd(38, 115);
+      this.tweens.add({
+        targets: p, x: x + Math.cos(a)*sp, y: y + Math.sin(a)*sp,
+        alpha: 0, scaleX: 0, scaleY: 0,
+        duration: rnd(340, 680), ease: 'Power2.easeOut',
+        onComplete: () => p.destroy()
+      });
+    }
+    for (let i = 0; i < 4; i++) {
+      const ring = this.add.circle(x, y, 2, C.gold, 0.7).setDepth(19);
+      this.tweens.add({
+        targets: ring, scaleX: rnd(4, 9), scaleY: rnd(4, 9), alpha: 0,
+        duration: rnd(260, 480), delay: i * 55, ease: 'Power1.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+  }
+
+  _launchConfetti() {
+    const pal = [C.gold, C.stripeR, C.stripeY, 0x40C4FF, 0x69F0AE, 0xFF80AB, 0x7C4DFF];
+    for (let i = 0; i < 55; i++) {
+      const col = pal[i % pal.length];
+      const x = rnd(30, W - 30);
+      const p = this.add.rectangle(x, -14, rnd(5, 12), rnd(4, 9), col).setDepth(35);
+      this.tweens.add({
+        targets: p, y: H + 20, angle: rnd(-400, 400), x: x + rnd(-90, 90),
+        duration: rnd(1400, 2800), delay: rnd(0, 700), ease: 'Power1.easeIn',
+        onComplete: () => p.destroy()
+      });
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#fff8e1',
+  scene: [GameScene],
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  input: { touch: { capture: true } }
+});
+</script>
+</body>
+</html>
