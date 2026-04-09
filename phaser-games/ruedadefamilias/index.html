@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🎡 La Rueda de Familias — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0d0030;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🎡  La Rueda de Familias  —  Phaser 3.60
+   TEKS 1.3 · Familias de Operaciones
+   La rueda muestra 3 números. El alumno completa las 4
+   ecuaciones de la familia (a+b, b+a, c-a, c-b) una a una.
+   ============================================================ */
+
+const W = 480, H = 700;
+
+// ── Wheel geometry (all in screen px) ───────────────────────
+const WCX   = W / 2;    // wheel center x
+const WCY   = 196;      // wheel center y
+const WR    = 115;      // wheel body radius
+const BR    = 82;       // badge center distance from wheel center
+const BADGE_RADIUS = 26; // badge circle radius
+
+// Badge screen positions (fixed, NOT spinning)
+const POS_C = { x: WCX,                                         y: WCY - BR          }; // top   – SUM (red)
+const POS_A = { x: WCX + Math.cos(30  * Math.PI / 180) * BR,   y: WCY + Math.sin(30  * Math.PI / 180) * BR }; // bottom-right – A
+const POS_B = { x: WCX + Math.cos(150 * Math.PI / 180) * BR,   y: WCY + Math.sin(150 * Math.PI / 180) * BR }; // bottom-left  – B
+
+const PANEL_Y = 370;  // top of question panel
+
+// ── Palette ──────────────────────────────────────────────────
+const C = {
+  bg1:       0x0d0030, bg2:     0x1a0050,
+  wheelFill: 0x4a148c, wheelMid: 0x6a1b9a, wheelEdge: 0x7b1fa2,
+  rim:       0xAB47BC, rimHi:   0xCE93D8,
+  gold:      0xFFD700, orange:  0xFF8C00,
+  badgeC:    0xC62828, badgeA:  0xBF360C,   // red / deep-orange
+  badgeCHi:  0xEF5350, badgeAHi:0xFF8A65,
+  green:     0x00E676, red:     0xFF5252, white: 0xffffff,
+  dotGrey:   0x455A64, dotOrange:0xF57C00, dotGreen: 0x2E7D32,
+  panelBg:   0x09000d, panelBrd: 0x6a1b9a,
+  btnBlue:   0x0D47A1, btnBluH: 0x1565C0,
+  btnNew:    0x1B5E20, btnNewH: 0x2E7D32,
+};
+
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+const rndF = (a, b) => Phaser.Math.FloatBetween(a, b);
+
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score         = 0;
+    this.eqIdx         = 0;           // current equation index 0-3
+    this.family        = null;        // { a, b, c }
+    this.equations     = [];          // 4 equation objects
+    this.choices       = [];          // 3 choice values
+    this.isLocked      = false;
+    this.dotStatuses   = [null, null, null, null];
+    this.familiesCount = 0;
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildBg();
+    this._buildWheel();
+    this._buildHUD();
+    this._buildProgressDots();
+    this._buildPanel();
+    this._buildEquationRow();
+    this._buildChoiceButtons();
+    this.time.delayedCall(300, () => this._newFamily());
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BACKGROUND  — deep purple gradient + stars + radial glow
+  // ══════════════════════════════════════════════════════════
+  _buildBg() {
+    const g = this.add.graphics();
+    for (let y = 0; y < H; y++) {
+      const t = y / H;
+      const r  = Math.round(Phaser.Math.Linear(13, 28, t));
+      const gg = Math.round(Phaser.Math.Linear(0,   6, t));
+      const b  = Math.round(Phaser.Math.Linear(48, 90, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Star field
+    for (let i = 0; i < 60; i++) {
+      const s = this.add.circle(rnd(0,W), rnd(0, H*0.7), rndF(0.4, 2.1), C.white, rndF(0.2, 0.9));
+      this.tweens.add({ targets: s, alpha: 0.04, yoyo: true, repeat: -1,
+        duration: rnd(800, 3200), delay: rnd(0, 2500) });
+    }
+
+    // Radial glow behind wheel (layered circles)
+    const gw = this.add.graphics().setDepth(1);
+    for (let r = 210; r > 0; r -= 14) {
+      gw.fillStyle(0x6a1b9a, 0.006 + 0.003 * (210 - r) / 210);
+      gw.fillCircle(WCX, WCY, r);
+    }
+
+    // Slow-rotating outer decorative ring (tick marks)
+    this._tickRing = this.add.graphics().setDepth(2);
+    this._tickRing.lineStyle(1.5, C.rimHi, 0.18);
+    for (let i = 0; i < 48; i++) {
+      const a  = (i / 48) * Math.PI * 2;
+      const r1 = WR + 24, r2 = WR + 32;
+      this._tickRing.lineBetween(
+        WCX + Math.cos(a)*r1, WCY + Math.sin(a)*r1,
+        WCX + Math.cos(a)*r2, WCY + Math.sin(a)*r2
+      );
+    }
+    this.tweens.add({ targets: this._tickRing, angle: 360, duration: 25000, repeat: -1 });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  WHEEL  — spinning body container + fixed number badges
+  // ══════════════════════════════════════════════════════════
+  _buildWheel() {
+    // Animated pulse rings (behind wheel, depth 3)
+    [1800, 1800].forEach((dur, i) => {
+      const pr = this.add.circle(WCX, WCY, WR + 14, C.rim, i===0 ? 0.12 : 0.07).setDepth(3);
+      this.tweens.add({
+        targets: pr, scaleX: 1.45, scaleY: 1.45, alpha: 0,
+        duration: dur, repeat: -1, delay: i * 900, ease: 'Sine.easeOut'
+      });
+    });
+
+    // ── Spinning container (the wheel body + spokes) ────────
+    this._wheelCon = this.add.container(WCX, WCY).setDepth(4);
+    const wg = this.add.graphics();
+
+    // Body — layered circles for a "gemstone" look
+    const layers = [
+      [WR + 2, C.wheelEdge, 0.35],
+      [WR,     C.wheelFill, 1.0 ],
+      [WR - 7, C.wheelMid,  0.7 ],
+      [WR - 18, 0x8e24aa,   0.4 ],
+    ];
+    layers.forEach(([r, col, a]) => { wg.fillStyle(col, a); wg.fillCircle(0, 0, r); });
+
+    // Decorative inner rings
+    [[WR - 8, 0.38], [WR - 18, 0.22], [WR - 30, 0.12]].forEach(([r, a]) => {
+      wg.lineStyle(1.5, C.gold, a);
+      wg.strokeCircle(0, 0, r);
+    });
+
+    // Crosshatch pattern (subtle)
+    wg.lineStyle(1, C.gold, 0.06);
+    for (let r = 20; r < WR - 10; r += 22) wg.strokeCircle(0, 0, r);
+
+    // 3 spokes at -90°, 30°, 150° — pointing toward badge positions
+    wg.lineStyle(5, C.gold, 0.6);
+    [-90, 30, 150].forEach(deg => {
+      const rad = deg * Math.PI / 180;
+      wg.lineBetween(0, 0, Math.cos(rad) * (BR - 16), Math.sin(rad) * (BR - 16));
+    });
+    // Secondary thin spokes between main ones (at 0°, 120°, 240°)
+    wg.lineStyle(1.5, C.gold, 0.2);
+    [0, 120, 240].forEach(deg => {
+      const rad = deg * Math.PI / 180;
+      wg.lineBetween(0, 0, Math.cos(rad) * (WR - 14), Math.sin(rad) * (WR - 14));
+    });
+
+    // Tick marks on rim
+    for (let i = 0; i < 36; i++) {
+      const a   = (i / 36) * Math.PI * 2;
+      const maj = i % 12 === 0;
+      wg.lineStyle(maj ? 3 : 1.5, C.gold, maj ? 0.55 : 0.2);
+      const r1 = WR - 4, r2 = WR - (maj ? 14 : 8);
+      wg.lineBetween(Math.cos(a)*r1, Math.sin(a)*r1, Math.cos(a)*r2, Math.sin(a)*r2);
+    }
+
+    // Outer gold rim
+    wg.lineStyle(6,   C.gold,  0.92); wg.strokeCircle(0, 0, WR);
+    wg.lineStyle(1.5, C.white, 0.18); wg.strokeCircle(0, 0, WR + 3);
+
+    // Center hub
+    wg.fillStyle(C.gold,    1);    wg.fillCircle(0, 0, 22);
+    wg.fillStyle(0xff8f00,  1);    wg.fillCircle(0, 0, 15);
+    wg.fillStyle(C.gold,    0.55); wg.fillCircle(-5, -6, 7);
+    wg.lineStyle(2.5, C.wheelFill, 0.5); wg.strokeCircle(0, 0, 22);
+
+    this._wheelCon.add(wg);
+
+    // Rotating ↻ on center hub (fixed, depth 6)
+    this._hubSym = this.add.text(WCX, WCY, '↻', {
+      fontSize: '16px', fontFamily: 'Arial Black, sans-serif', color: '#3d1f08'
+    }).setOrigin(0.5).setDepth(6).setAlpha(0.75);
+    this.tweens.add({ targets: this._hubSym, angle: -360, duration: 14000, repeat: -1 });
+
+    // ── Fixed number badges (not in spinning container) ─────
+    this._badges = {
+      c: this._makeBadge(POS_C.x, POS_C.y, C.badgeC,  'SUMA', '?'),
+      a: this._makeBadge(POS_A.x, POS_A.y, C.badgeA,  'A',    '?'),
+      b: this._makeBadge(POS_B.x, POS_B.y, C.badgeA,  'B',    '?'),
+    };
+  }
+
+  _makeBadge(x, y, col, tagLabel, initNum) {
+    const r = BADGE_RADIUS;
+
+    // Badge graphic (redrawn on state changes)
+    const bg = this.add.graphics().setDepth(7);
+    const draw = (c, pulse) => {
+      bg.clear();
+      // Drop shadow
+      bg.fillStyle(0x000000, 0.45); bg.fillCircle(x + 2, y + 3, r + 2);
+      // Body glow layers
+      bg.fillStyle(c, 0.25); bg.fillCircle(x, y, r + 5);
+      bg.fillStyle(c, 1);    bg.fillCircle(x, y, r);
+      // Inner highlight
+      bg.fillStyle(C.white, 0.22); bg.fillEllipse(x - 5, y - 6, r * 0.9, r * 0.6);
+      // Border
+      bg.lineStyle(3, C.gold,  0.9); bg.strokeCircle(x, y, r);
+      bg.lineStyle(1, C.white, 0.25); bg.strokeCircle(x, y, r - 5);
+    };
+    draw(col, false);
+
+    // Number text
+    const txt = this.add.text(x, y, initNum, {
+      fontSize: '28px', fontFamily: 'Arial Black, Impact, sans-serif',
+      color: '#ffffff', stroke: '#000000', strokeThickness: 3
+    }).setOrigin(0.5).setDepth(8);
+
+    // Tiny tag label above/around badge
+    const tagOffX = tagLabel === 'SUMA' ? 0 : (tagLabel === 'A' ? 2 : -2);
+    const tagOffY = tagLabel === 'SUMA' ? -(r + 14) : (r + 11);
+    this.add.text(x + tagOffX, y + tagOffY, tagLabel, {
+      fontSize: '9px', fontFamily: 'Arial, sans-serif',
+      color: tagLabel === 'SUMA' ? '#EF9A9A' : '#FFCCBC'
+    }).setOrigin(0.5).setDepth(8);
+
+    return { bg, txt, x, y, col, draw };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HUD
+  // ══════════════════════════════════════════════════════════
+  _buildHUD() {
+    const g = this.add.graphics().setDepth(20);
+    // Score pill
+    g.fillStyle(0x000000, 0.52); g.fillRoundedRect(8, 8, 140, 42, 11);
+    g.lineStyle(1.5, C.gold, 0.45); g.strokeRoundedRect(8, 8, 140, 42, 11);
+    this._scoreTxt = this.add.text(20, 16, '⭐  0', {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setDepth(21);
+
+    // Families counter
+    g.fillStyle(0x000000, 0.52); g.fillRoundedRect(W - 148, 8, 140, 42, 11);
+    g.lineStyle(1.5, C.rim, 0.45); g.strokeRoundedRect(W - 148, 8, 140, 42, 11);
+    this._familiesTxt = this.add.text(W - 136, 16, '🎯  0', {
+      fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#CE93D8'
+    }).setDepth(21);
+
+    // Title
+    this.add.text(W / 2, 57, '🎡  La Rueda de Familias', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setAlpha(0.88).setDepth(21);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PROGRESS DOTS  (4 dots, one per equation)
+  // ══════════════════════════════════════════════════════════
+  _buildProgressDots() {
+    const dotY = PANEL_Y - 26;
+    const dotR = 10, gap = 18;
+    const totalW = 4 * dotR * 2 + 3 * gap;
+    const sx = W / 2 - totalW / 2 + dotR;
+
+    this._dots = [];
+    for (let i = 0; i < 4; i++) {
+      const dx = sx + i * (dotR * 2 + gap);
+      const dg = this.add.graphics().setDepth(15);
+      const nt = this.add.text(dx, dotY, '' + (i + 1), {
+        fontSize: '10px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+      }).setOrigin(0.5).setDepth(16);
+      this._dots.push({ g: dg, nt, x: dx, y: dotY, r: dotR });
+      this._drawDot(i, 'pending');
+    }
+  }
+
+  _drawDot(idx, state) {
+    const { g, x, y, r } = this._dots[idx];
+    g.clear();
+    const col = state === 'correct' ? C.dotGreen
+              : state === 'active'  ? C.dotOrange
+              : state === 'wrong'   ? C.red
+              :                       C.dotGrey;
+    const alpha = state === 'pending' ? 0.35 : 1;
+    // Shadow
+    g.fillStyle(0x000000, 0.3); g.fillCircle(x + 1, y + 2, r);
+    // Body
+    g.fillStyle(col, alpha); g.fillCircle(x, y, r);
+    // Border
+    g.lineStyle(2, state === 'active' ? C.gold : col, 0.85);
+    g.strokeCircle(x, y, r);
+    // Check mark on correct
+    if (state === 'correct') {
+      g.lineStyle(2, C.white, 0.95);
+      g.lineBetween(x - 4, y + 1,  x - 1, y + 4);
+      g.lineBetween(x - 1, y + 4,  x + 5, y - 3);
+    }
+    // Active pulse
+    if (state === 'active') {
+      this.tweens.add({ targets: g, scaleX: 1.3, scaleY: 1.3, duration: 140, yoyo: true, ease: 'Sine.easeOut' });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BOTTOM PANEL  (dark background)
+  // ══════════════════════════════════════════════════════════
+  _buildPanel() {
+    const g = this.add.graphics().setDepth(14);
+    // Dark fill
+    g.fillStyle(C.panelBg, 1);
+    g.fillRect(0, PANEL_Y, W, H - PANEL_Y);
+    // Top border lines
+    g.lineStyle(5, C.panelBrd, 1);
+    g.lineBetween(0, PANEL_Y, W, PANEL_Y);
+    g.lineStyle(1.5, C.gold, 0.28);
+    g.lineBetween(0, PANEL_Y + 7, W, PANEL_Y + 7);
+
+    // Subtle hex/dot pattern in panel background
+    for (let i = 0; i < 20; i++) {
+      g.fillStyle(C.wheelMid, 0.04);
+      g.fillCircle(rnd(20, W - 20), PANEL_Y + rnd(20, H - PANEL_Y - 20), rnd(6, 18));
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  EQUATION ROW  (sign board + token display)
+  // ══════════════════════════════════════════════════════════
+  _buildEquationRow() {
+    const eqY  = PANEL_Y + 22;
+    const sbH  = 78;
+    const cx   = W / 2;
+
+    // Sign board
+    const sg = this.add.graphics().setDepth(15);
+    sg.fillStyle(0x000000, 0.5);
+    sg.fillRoundedRect(18, eqY, W - 36, sbH, 13);
+    sg.lineStyle(2, C.panelBrd, 0.75);
+    sg.strokeRoundedRect(18, eqY, W - 36, sbH, 13);
+    sg.fillStyle(C.gold, 0.04);
+    sg.fillRoundedRect(20, eqY + 2, W - 40, sbH - 4, 11);
+    // Corner rivets
+    [[22, eqY+4], [W-22, eqY+4], [22, eqY+sbH-4], [W-22, eqY+sbH-4]].forEach(([rx,ry]) => {
+      sg.fillStyle(C.rimHi, 0.4); sg.fillCircle(rx, ry, 3);
+    });
+
+    // "Ecuación X de 4" subtitle
+    this._eqLabel = this.add.text(cx, eqY + 13, 'Ecuación 1 de 4', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#9575CD'
+    }).setOrigin(0.5).setDepth(16);
+
+    // Five tokens: [left] [op] [right] [=] [answer]
+    // Widths: numToken=52, opToken=26 → total = 52*3 + 26*2 = 208
+    const tkW = 52, opW = 26;
+    const totalTW = tkW * 3 + opW * 2;
+    const sx = cx - totalTW / 2;
+    const tkY = eqY + 50;
+
+    const numSt = col => ({ fontSize: '32px', fontFamily: 'Arial Black, sans-serif', color: col });
+    const opSt  = ()   => ({ fontSize: '24px', fontFamily: 'Arial Black, sans-serif', color: '#9E9E9E' });
+
+    this._eqLeft   = this.add.text(sx + tkW * 0.5,                  tkY, '?', numSt('#FF8A65')).setOrigin(0.5).setDepth(16);
+    this._eqOp     = this.add.text(sx + tkW + opW * 0.5,            tkY, '+', opSt()).setOrigin(0.5).setDepth(16);
+    this._eqRight  = this.add.text(sx + tkW + opW + tkW * 0.5,      tkY, '?', numSt('#FF8A65')).setOrigin(0.5).setDepth(16);
+    this._eqEqSign = this.add.text(sx + tkW*2 + opW + opW * 0.5,    tkY, '=', opSt()).setOrigin(0.5).setDepth(16);
+
+    // Answer slot (box + text)
+    const ansX = sx + tkW * 2 + opW * 2;
+    this._ansSlotG = this.add.graphics().setDepth(16);
+    this._ansX     = ansX;
+    this._ansSlotY = tkY - 22;
+    this._drawAnsSlot('neutral');
+    this._ansTxt = this.add.text(ansX + tkW / 2, tkY, '□', {
+      fontSize: '34px', fontFamily: 'Arial Black, sans-serif', color: '#9575CD'
+    }).setOrigin(0.5).setDepth(17);
+
+    // Feedback text below sign board
+    this._fbTxt = this.add.text(cx, eqY + sbH + 16, '', {
+      fontSize: '15px', fontFamily: 'Arial Black, sans-serif',
+      color: C.green, stroke: '#000000', strokeThickness: 3, align: 'center'
+    }).setOrigin(0.5).setDepth(16).setAlpha(0);
+  }
+
+  _drawAnsSlot(state) {
+    const g = this._ansSlotG;
+    const ax = this._ansX, ay = this._ansSlotY;
+    const w = 52, h = 50;
+    g.clear();
+    const col   = state === 'correct' ? C.green : state === 'wrong' ? C.red : C.gold;
+    const alpha = state === 'neutral' ? 0.15 : 0.3;
+    g.fillStyle(col, alpha);
+    g.fillRoundedRect(ax, ay, w, h, 10);
+    g.lineStyle(state === 'neutral' ? 2 : 3, col, state === 'neutral' ? 0.5 : 1);
+    g.strokeRoundedRect(ax, ay, w, h, 10);
+    // Glow on correct
+    if (state === 'correct') {
+      g.lineStyle(6, col, 0.15);
+      g.strokeRoundedRect(ax - 3, ay - 3, w + 6, h + 6, 13);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CHOICE BUTTONS  (3 answer options)
+  // ══════════════════════════════════════════════════════════
+  _buildChoiceButtons() {
+    const btnW = 118, btnH = 72;
+    const gap  = 10;
+    const totalBW = 3 * btnW + 2 * gap;
+    const sx  = (W - totalBW) / 2;
+    const btnY = PANEL_Y + 122;
+
+    this._choiceBtns = [];
+    for (let i = 0; i < 3; i++) {
+      this._choiceBtns.push(this._makeBtn(sx + i * (btnW + gap), btnY, btnW, btnH, i));
+    }
+
+    // TEKS tag
+    this.add.text(W / 2, btnY + btnH + 16, 'TEKS 1.3 · Familias de Operaciones', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#5C35A0'
+    }).setOrigin(0.5).setDepth(15);
+  }
+
+  _makeBtn(x, y, w, h, idx) {
+    const base = C.btnBlue, hov = C.btnBluH;
+    const g = this.add.graphics().setDepth(15);
+
+    const draw = (col, dy = 0) => {
+      g.clear();
+      g.fillStyle(0x000000, 0.4);  g.fillRoundedRect(x + 3, y + 5 + dy, w, h, 13);
+      g.fillStyle(col, 1);         g.fillRoundedRect(x, y + dy, w, h, 13);
+      g.fillStyle(C.white, 0.12);  g.fillRoundedRect(x + 4, y + dy + 4, w - 8, h * 0.38, { tl:9, tr:9, bl:0, br:0 });
+      g.lineStyle(2, 0x90CAF9, 0.5); g.strokeRoundedRect(x, y + dy, w, h, 13);
+    };
+    draw(base);
+
+    const txt = this.add.text(x + w / 2, y + h / 2, '?', {
+      fontSize: '32px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(16);
+
+    const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h)
+      .setInteractive().setDepth(17).setAlpha(0.001);
+    hit.on('pointerover',  () => { if (!this.isLocked) draw(hov); });
+    hit.on('pointerout',   () => draw(base));
+    hit.on('pointerdown',  () => { if (!this.isLocked) draw(hov, 3); });
+    hit.on('pointerup',    () => { draw(base); if (!this.isLocked) this._submitAnswer(this.choices[idx]); });
+
+    return { g, txt, hit, draw, base };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  GAME LOGIC
+  // ══════════════════════════════════════════════════════════
+  _newFamily() {
+    this.isLocked    = true;
+    this.eqIdx       = 0;
+    this.dotStatuses = [null, null, null, null];
+
+    // Generate family (different from current if possible)
+    let fam;
+    let tries = 0;
+    do {
+      fam = this._genFamily();
+      tries++;
+    } while (this.family && tries < 20 &&
+             fam.a === this.family.a && fam.b === this.family.b);
+    this.family    = fam;
+    this.equations = this._getEquations(fam);
+
+    // Spin wheel → reveal numbers → load equation 0
+    this._spinWheel(() => {
+      this._revealBadges();
+      this.time.delayedCall(400, () => this._loadEquation(0));
+    });
+  }
+
+  _genFamily() {
+    const a = rnd(1, 9);
+    const b = rnd(1, Math.min(9, 15 - a));
+    return { a, b, c: a + b };
+  }
+
+  _getEquations({ a, b, c }) {
+    return [
+      { left: a, op: '+', right: b, answer: c },
+      { left: b, op: '+', right: a, answer: c },
+      { left: c, op: '-', right: a, answer: b },
+      { left: c, op: '-', right: b, answer: a },
+    ];
+  }
+
+  _makeChoices(correct) {
+    const s = new Set([correct]);
+    let tries = 0;
+    while (s.size < 3 && tries++ < 60) {
+      const off = rnd(1, 5) * (Math.random() < 0.5 ? 1 : -1);
+      const c = correct + off;
+      if (c > 0) s.add(c);
+    }
+    return Phaser.Utils.Array.Shuffle(Array.from(s));
+  }
+
+  _loadEquation(idx) {
+    this.eqIdx   = idx;
+    this.choices = this._makeChoices(this.equations[idx].answer);
+    this.isLocked = false;
+    this._refreshEquationDisplay();
+    this._refreshChoiceLabels();
+    this._refreshDots();
+  }
+
+  _refreshEquationDisplay() {
+    const eq = this.equations[this.eqIdx];
+    const opStr = eq.op === '+' ? '+' : '−';
+
+    this._eqLabel.setText('Ecuación ' + (this.eqIdx + 1) + ' de 4');
+    this._eqLeft.setText('' + eq.left);
+    this._eqOp.setText(opStr);
+    this._eqRight.setText('' + eq.right);
+    this._ansTxt.setText('□').setColor('#9575CD');
+    this._drawAnsSlot('neutral');
+
+    // Cascade fade-in
+    [this._eqLeft, this._eqOp, this._eqRight, this._eqEqSign, this._ansTxt].forEach((t, i) => {
+      t.setAlpha(0);
+      this.tweens.add({ targets: t, alpha: 1, duration: 110, delay: i * 28 });
+    });
+  }
+
+  _refreshChoiceLabels() {
+    this._choiceBtns.forEach((btn, i) => btn.txt.setText('' + this.choices[i]));
+  }
+
+  _refreshDots() {
+    for (let i = 0; i < 4; i++) {
+      const state = this.dotStatuses[i] === true  ? 'correct'
+                  : this.dotStatuses[i] === false ? 'wrong'
+                  : i === this.eqIdx              ? 'active'
+                  :                                  'pending';
+      this._drawDot(i, state);
+    }
+  }
+
+  // ── Answer submission ───────────────────────────────────────
+  _submitAnswer(value) {
+    if (this.isLocked) return;
+    this.isLocked = true;
+
+    if (value === this.equations[this.eqIdx].answer) {
+      this._onCorrect(value);
+    } else {
+      this._onWrong(value);
+    }
+  }
+
+  _onCorrect(value) {
+    this.score += 10;
+    this._scoreTxt.setText('⭐  ' + this.score);
+
+    const eq = this.equations[this.eqIdx];
+    const opStr = eq.op === '+' ? '+' : '−';
+
+    // Fill answer slot
+    this._ansTxt.setText('' + value).setColor('#00E676');
+    this._drawAnsSlot('correct');
+    // Pop scale
+    this.tweens.add({
+      targets: [this._ansSlotG, this._ansTxt],
+      scaleX: 1.22, scaleY: 1.22, duration: 130, yoyo: true, ease: 'Sine.easeOut'
+    });
+    this._burst(this._ansX + 26, this._ansSlotY + 25);
+    this._showFeedback(`✓  ${eq.left} ${opStr} ${eq.right} = ${value}`, true);
+
+    // Score pop
+    this._scorePop('+10');
+
+    // Mark dot
+    this.dotStatuses[this.eqIdx] = true;
+    this._drawDot(this.eqIdx, 'correct');
+
+    if (this.eqIdx < 3) {
+      this.time.delayedCall(900, () => this._loadEquation(this.eqIdx + 1));
+    } else {
+      this.time.delayedCall(700, () => this._showComplete());
+    }
+  }
+
+  _onWrong(value) {
+    this._ansTxt.setText('' + value).setColor('#FF5252');
+    this._drawAnsSlot('wrong');
+    this._shake(this._ansTxt);
+    this._shake(this._ansSlotG);
+    this._showFeedback('✗  Intenta de nuevo', false);
+
+    // Red flash
+    const flash = this.add.rectangle(W / 2, H / 2, W, H, C.red, 0.11).setDepth(50);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 360, onComplete: () => flash.destroy() });
+
+    // Reset after delay
+    this.time.delayedCall(880, () => {
+      this._ansTxt.setText('□').setColor('#9575CD');
+      this._drawAnsSlot('neutral');
+      this.isLocked = false;
+    });
+  }
+
+  // ── Wheel spin ──────────────────────────────────────────────
+  _spinWheel(onComplete) {
+    // Hide badge numbers during spin
+    Object.values(this._badges).forEach(b => {
+      b.txt.setText('?');
+      b.txt.setAlpha(0.4);
+    });
+
+    // Spin the wheel body container (2.5 full rotations)
+    const spins = 2 + rndF(0.3, 0.7);
+    this.tweens.add({
+      targets: this._wheelCon,
+      angle: this._wheelCon.angle + 360 * spins,
+      duration: 1100 + rnd(0, 200),
+      ease: 'Power2.easeOut',
+      onComplete: () => {
+        this._wheelCon.angle = 0; // normalize
+        if (onComplete) onComplete();
+      }
+    });
+  }
+
+  _revealBadges() {
+    const { a, b, c } = this.family;
+    [[this._badges.c, c], [this._badges.a, a], [this._badges.b, b]].forEach(([badge, num], i) => {
+      this.time.delayedCall(i * 110, () => {
+        badge.txt.setText('' + num);
+        badge.txt.setScale(0.4).setAlpha(1);
+        this.tweens.add({
+          targets: badge.txt, scaleX: 1.2, scaleY: 1.2, alpha: 1,
+          duration: 200, ease: 'Back.easeOut',
+          onComplete: () => this.tweens.add({ targets: badge.txt, scaleX: 1, scaleY: 1, duration: 120 })
+        });
+      });
+    });
+  }
+
+  // ── Family complete overlay ─────────────────────────────────
+  _showComplete() {
+    this.familiesCount++;
+    this._familiesTxt.setText('🎯  ' + this.familiesCount);
+    this._launchConfetti();
+
+    const { a, b, c } = this.family;
+    const eqLines = [
+      `${a} + ${b} = ${c}`,
+      `${b} + ${a} = ${c}`,
+      `${c} − ${a} = ${b}`,
+      `${c} − ${b} = ${a}`,
+    ];
+
+    const cardW = 340, cardH = 370;
+    const cardX = (W - cardW) / 2, cardY = (H - cardH) / 2 - 10;
+    const mid   = cardX + cardW / 2;
+    const refs  = []; // collect all overlay objects for cleanup
+
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0).setDepth(30);
+    refs.push(dim);
+    this.tweens.add({ targets: dim, fillAlpha: 0.5, duration: 260 });
+
+    const cg = this.add.graphics().setDepth(31).setAlpha(0);
+    refs.push(cg);
+    cg.fillStyle(0x4a148c, 1); cg.fillRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.lineStyle(4, C.gold, 0.95); cg.strokeRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.fillStyle(C.gold, 0.06); cg.fillRoundedRect(cardX+2, cardY+2, cardW-4, cardH-4, 22);
+    // Inner decorative ring
+    cg.lineStyle(1.5, C.rim, 0.3); cg.strokeRoundedRect(cardX+12, cardY+12, cardW-24, cardH-24, 16);
+    this.tweens.add({ targets: cg, alpha: 1, duration: 260 });
+
+    const addText = (x, y, str, style, depth) => {
+      const t = this.add.text(x, y, str, style).setOrigin(0.5).setDepth(depth || 32).setAlpha(0);
+      refs.push(t);
+      this.tweens.add({ targets: t, alpha: 1, duration: 200, delay: 180 });
+      return t;
+    };
+
+    let ty = cardY + 24;
+    addText(mid, ty, '🎉', { fontSize: '54px' }); ty += 62;
+    addText(mid, ty, '¡Familia Completa!', { fontSize: '24px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700' }); ty += 34;
+
+    // Equations summary box
+    const sumBoxY = ty - 6;
+    const sumG = this.add.graphics().setDepth(32).setAlpha(0);
+    refs.push(sumG);
+    sumG.fillStyle(0x000000, 0.35);
+    sumG.fillRoundedRect(cardX + 22, sumBoxY, cardW - 44, eqLines.length * 30 + 14, 10);
+    this.tweens.add({ targets: sumG, alpha: 1, duration: 200, delay: 180 });
+
+    eqLines.forEach((line, i) => {
+      addText(mid, ty + i * 30 + 8, line, {
+        fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+      });
+    });
+    ty += eqLines.length * 30 + 24;
+
+    addText(mid, ty, 'Puntos: ' + this.score, {
+      fontSize: '19px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }); ty += 38;
+
+    // Nueva Familia button
+    const btnW = 210, btnH = 52, btnX = mid - btnW / 2, btnY = ty;
+    const btnG = this.add.graphics().setDepth(32).setAlpha(0);
+    refs.push(btnG);
+    btnG.fillStyle(C.btnNew, 1); btnG.fillRoundedRect(btnX, btnY, btnW, btnH, 13);
+    btnG.lineStyle(2, 0x81C784, 0.7); btnG.strokeRoundedRect(btnX, btnY, btnW, btnH, 13);
+    this.tweens.add({ targets: btnG, alpha: 1, duration: 200, delay: 200 });
+
+    const btnTxt = addText(mid, btnY + btnH / 2, '🎡  Nueva Familia', {
+      fontSize: '15px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }, 33);
+
+    const hit = this.add.rectangle(mid, btnY + btnH / 2, btnW, btnH)
+      .setInteractive().setDepth(34).setAlpha(0.001);
+    refs.push(hit);
+
+    hit.on('pointerover',  () => { btnG.clear(); btnG.fillStyle(C.btnNewH,1); btnG.fillRoundedRect(btnX,btnY,btnW,btnH,13); });
+    hit.on('pointerout',   () => { btnG.clear(); btnG.fillStyle(C.btnNew,1);  btnG.fillRoundedRect(btnX,btnY,btnW,btnH,13); });
+    hit.on('pointerup',    () => {
+      refs.forEach(o => { if (o && o.destroy) o.destroy(); });
+      this._newFamily();
+    });
+  }
+
+  _launchConfetti() {
+    const pal = [C.gold, C.green, 0xFF6B6B, 0x4FC3F7, C.rimHi, 0xA5D6A7, 0xFFAFCC, 0x80DEEA];
+    for (let i = 0; i < 48; i++) {
+      const col = pal[i % pal.length];
+      const x = rnd(30, W - 30);
+      const p = this.add.rectangle(x, -16, rnd(5, 12), rnd(4, 9), col).setDepth(29);
+      this.tweens.add({
+        targets: p, y: H + 20, angle: rnd(-400, 400), x: x + rnd(-90, 90),
+        duration: rnd(1500, 3000), delay: rnd(0, 800), ease: 'Power1.easeIn',
+        onComplete: () => p.destroy()
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  FX HELPERS
+  // ══════════════════════════════════════════════════════════
+  _shake(obj) {
+    const ox = obj.x;
+    this.tweens.add({
+      targets: obj, x: { from: ox - 10, to: ox + 10 },
+      duration: 44, yoyo: true, repeat: 5, ease: 'Sine.easeInOut',
+      onComplete: () => { obj.x = ox; }
+    });
+  }
+
+  _showFeedback(msg, ok) {
+    this._fbTxt.setText(msg)
+      .setColor(ok ? '#00E676' : '#FF5252')
+      .setAlpha(1).setScale(1.12);
+    this.tweens.add({
+      targets: this._fbTxt, scaleX: 1, scaleY: 1, alpha: 0,
+      duration: ok ? 1500 : 1100, delay: ok ? 400 : 80, ease: 'Sine.easeIn'
+    });
+  }
+
+  _scorePop(label) {
+    const pop = this.add.text(W - 60, 56, label, {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif',
+      color: '#00E676', stroke: '#000000', strokeThickness: 3
+    }).setOrigin(0.5).setDepth(22);
+    this.tweens.add({
+      targets: pop, y: 28, alpha: 0, duration: 900, ease: 'Power2.easeOut',
+      onComplete: () => pop.destroy()
+    });
+  }
+
+  _burst(x, y) {
+    const pal = [C.gold, C.green, 0xF48FB1, 0x80DEEA, C.rimHi, C.orange, 0xA5D6A7];
+    for (let i = 0; i < 20; i++) {
+      const p = this.add.circle(x, y, rnd(3, 10), pal[i % pal.length]).setDepth(22);
+      const a = (i / 20) * Math.PI * 2, sp = rnd(40, 130);
+      this.tweens.add({
+        targets: p, x: x + Math.cos(a)*sp, y: y + Math.sin(a)*sp,
+        alpha: 0, scaleX: 0, scaleY: 0,
+        duration: rnd(360, 700), ease: 'Power2.easeOut',
+        onComplete: () => p.destroy()
+      });
+    }
+    for (let i = 0; i < 5; i++) {
+      const ring = this.add.circle(x, y, 2, C.gold, 0.7).setDepth(21);
+      this.tweens.add({
+        targets: ring, scaleX: rnd(5, 11), scaleY: rnd(5, 11), alpha: 0,
+        duration: rnd(280, 500), delay: i * 55, ease: 'Power1.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#0d0030',
+  scene: [GameScene],
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  input: { touch: { capture: true } }
+});
+</script>
+</body>
+</html>
