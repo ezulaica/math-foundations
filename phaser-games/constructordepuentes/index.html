@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🏗️ Constructor de Puentes — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #1a3a5c;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🏗️  Constructor de Puentes  —  Phaser 3.60
+   TEKS 1.3 · Operaciones con Números Desconocidos
+   Resuelve □ + k = r, k + □ = r, k − □ = r para colocar
+   tablones y cruzar el río con un personaje animado.
+   ============================================================ */
+
+const W = 480, H = 700;
+
+// ── Bridge geometry ──────────────────────────────────────────
+const BANK_W       = 50;           // width of each river bank
+const TOTAL_PLANKS = 7;
+const SLOT_W       = (W - BANK_W * 2) / TOTAL_PLANKS;   // ≈ 54.3 px
+const BRIDGE_Y     = 300;          // y of bridge deck top
+const PLANK_H      = 16;           // plank height
+const PLANK_W      = SLOT_W - 5;   // plank visual width
+const RIVER_Y      = BRIDGE_Y + PLANK_H;   // 316
+const RIVER_H      = 90;
+const CHAR_BASE_Y  = BRIDGE_Y - 26; // character feet resting y
+const PANEL_Y      = 420;          // top of question panel
+
+const plankCX = i => BANK_W + SLOT_W * i + SLOT_W / 2; // center x for plank i
+
+// ── Colors ───────────────────────────────────────────────────
+const C = {
+  skyHi:    0x87CEEB, skyLo:   0xB0E2FF,
+  hillDk:   0x2E7D32, hill:    0x388E3C, hillLt: 0x4CAF50,
+  waterDk:  0x1565C0, water:   0x1976D2, waterLt:0x42A5F5,
+  bankDirt: 0x5D4037, bankTop: 0x795548,
+  plankDk:  0x4E342E, plank:   0x6D4C41, plankLt:0x8D6E63,
+  stoneDk:  0x546E7A, stone:   0x607D8B, stoneLt:0x90A4AE,
+  panelBg:  0x1B0000, panelMid:0x3E2723, panelLt:0x4E342E,
+  gold:     0xFFD700, white:   0xffffff,
+  green:    0x00E676, red:     0xFF5252,
+  btnBlue:  0x0D47A1, btnBluH: 0x1565C0,
+  btnGrn:   0x1B5E20, btnGrnH: 0x2E7D32,
+};
+
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+const rndF = (a, b) => Phaser.Math.FloatBetween(a, b);
+
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score        = 0;
+    this.plankIdx     = 0;
+    this.equation     = null;
+    this.choices      = [];
+    this.isLocked     = false;
+    this.placedPlanks = [];
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildSky();
+    this._buildHills();
+    this._buildRiver();
+    this._buildBanks();
+    this._buildBridgeGuides();
+    this._buildHUD();
+    this._buildPanel();
+    this._buildEquationRow();
+    this._buildChoiceButtons();
+    this._buildCharacter();
+    this.time.delayedCall(300, () => this._nextPlank());
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  SKY  (gradient scanlines + sun + clouds)
+  // ══════════════════════════════════════════════════════════
+  _buildSky() {
+    const g = this.add.graphics().setDepth(0);
+    for (let y = 0; y < PANEL_Y; y++) {
+      const t = y / PANEL_Y;
+      const r  = Math.round(Phaser.Math.Linear(100, 170, t));
+      const gg = Math.round(Phaser.Math.Linear(190, 225, t));
+      const b  = Math.round(Phaser.Math.Linear(240, 255, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Sun (top-right)
+    const sx = W - 68, sy = 52;
+    const sg = this.add.graphics().setDepth(1);
+    [72, 58, 44, 32].forEach((r, i) =>
+      sg.fillStyle(0xFFFF99, [0.05, 0.08, 0.13, 0.9][i]).fillCircle(sx, sy, r)
+    );
+    // Rotating rays
+    const rayG = this.add.graphics().setDepth(1);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      rayG.lineStyle(2.5, 0xFFEE44, 0.22);
+      rayG.lineBetween(sx + Math.cos(a)*34, sy + Math.sin(a)*34,
+                       sx + Math.cos(a)*58, sy + Math.sin(a)*58);
+    }
+    this.tweens.add({ targets: rayG, angle: 360, duration: 22000, repeat: -1 });
+
+    // Clouds
+    [
+      { x: 50,  y: 68, s: 1.0 },
+      { x: 220, y: 48, s: 0.8 },
+      { x: 360, y: 80, s: 0.9 },
+    ].forEach(({ x, y, s }) => this._cloud(x, y, s));
+  }
+
+  _cloud(cx, cy, s) {
+    const cg = this.add.graphics().setDepth(2);
+    cg.fillStyle(0xffffff, 0.88);
+    // Puffs drawn relative to (0,0); container positioned by cg.x/y
+    [[0,0,28],[25,-11,22],[50,0,26],[18,13,20],[40,11,19]].forEach(([ox,oy,r]) =>
+      cg.fillEllipse(ox * s, oy * s, r * s * 2, r * s * 1.55)
+    );
+    cg.x = cx; cg.y = cy;
+    // Float bob
+    this.tweens.add({
+      targets: cg, y: cy - 5,
+      duration: rnd(3200, 5500), yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      delay: rnd(0, 2000)
+    });
+    // Drift right, wrap around
+    this.tweens.add({
+      targets: cg, x: W + 250,
+      duration: rnd(30000, 55000), repeat: -1, delay: rnd(0, 20000),
+      onRepeat: () => { cg.x = -220 * s; }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HILLS  (layered bezier-approximated polygon)
+  // ══════════════════════════════════════════════════════════
+  _buildHills() {
+    // Helper: build polygon points for a hill silhouette
+    const hillPts = (baseY, amplitude, freq, phase) => {
+      const pts = [];
+      const steps = 100;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = t * W;
+        const wave = Math.sin(t * Math.PI * freq + phase) * amplitude
+                   + Math.sin(t * Math.PI * (freq * 2.1)) * (amplitude * 0.4);
+        pts.push({ x, y: baseY - wave });
+      }
+      pts.push({ x: W, y: PANEL_Y + 10 });
+      pts.push({ x: 0, y: PANEL_Y + 10 });
+      return pts;
+    };
+
+    const hg = this.add.graphics().setDepth(3);
+
+    // Back hill (dark)
+    hg.fillStyle(C.hillDk, 1);
+    hg.fillPoints(hillPts(268, 55, 2.2, 0.4), true);
+
+    // Mid hill
+    hg.fillStyle(C.hill, 1);
+    hg.fillPoints(hillPts(282, 42, 2.8, 1.1), true);
+
+    // Front hill highlight strip
+    hg.fillStyle(C.hillLt, 0.45);
+    hg.fillPoints(hillPts(284, 30, 3.0, 1.1), true);
+
+    // Grass dots for texture
+    for (let i = 0; i < 30; i++) {
+      const gx = rnd(10, W - 10);
+      const gy = rnd(248, 290);
+      hg.fillStyle(C.hillLt, rndF(0.2, 0.5));
+      hg.fillCircle(gx, gy, rnd(2, 5));
+    }
+
+    // Trees (emoji-like triangles on hills)
+    [55, 130, 200, 340, 420].forEach(tx => {
+      const ty = rnd(252, 276);
+      const sc = rndF(0.6, 1.0);
+      const tg = this.add.graphics().setDepth(4);
+      tg.fillStyle(0x4E342E, 1);
+      tg.fillRect(tx - 3*sc, ty, 6*sc, 16*sc);
+      [[0,-38,18],[0,-24,22],[0,-10,19]].forEach(([ox,oy,r]) => {
+        tg.fillStyle(C.hillDk, 1);
+        tg.fillTriangle(tx+ox*sc, ty+oy*sc, tx-(r*sc), ty+(oy+r*1.1)*sc, tx+(r*sc), ty+(oy+r*1.1)*sc);
+      });
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  RIVER  (animated water)
+  // ══════════════════════════════════════════════════════════
+  _buildRiver() {
+    const rg = this.add.graphics().setDepth(5);
+
+    // Base river
+    rg.fillStyle(C.waterDk, 1);
+    rg.fillRect(0, RIVER_Y, W, RIVER_H);
+
+    // Mid-depth lighter strip
+    rg.fillStyle(C.water, 0.65);
+    rg.fillRect(0, RIVER_Y + 12, W, RIVER_H - 24);
+
+    // Surface lightest
+    rg.fillStyle(C.waterLt, 0.25);
+    rg.fillRect(0, RIVER_Y + 20, W, 28);
+
+    // Top/bottom edge lines
+    rg.lineStyle(2, 0x0D47A1, 0.5);
+    rg.lineBetween(0, RIVER_Y, W, RIVER_Y);
+    rg.lineBetween(0, RIVER_Y + RIVER_H, W, RIVER_Y + RIVER_H);
+
+    // Animated shimmer strips
+    for (let i = 0; i < 6; i++) {
+      const sh = this.add.rectangle(
+        rnd(-60, W), RIVER_Y + rnd(8, RIVER_H - 10),
+        rnd(30, 80), rnd(2, 4), 0xffffff, rndF(0.12, 0.25)
+      ).setDepth(6);
+      this.tweens.add({
+        targets: sh, x: W + 80,
+        duration: rnd(3200, 6500), repeat: -1, delay: i * 600,
+        onRepeat: () => {
+          sh.x = -80;
+          sh.y = RIVER_Y + rnd(8, RIVER_H - 10);
+          sh.width = rnd(30, 80);
+        }
+      });
+    }
+
+    // Wave ripple rings (ambient)
+    this.time.addEvent({
+      delay: 2200,
+      repeat: -1,
+      callback: () => {
+        const rx = rnd(BANK_W + 20, W - BANK_W - 20);
+        const ry = RIVER_Y + rnd(10, RIVER_H - 10);
+        const ring = this.add.circle(rx, ry, 3, C.waterLt, 0.5).setDepth(7);
+        this.tweens.add({
+          targets: ring, scaleX: 6, scaleY: 3, alpha: 0,
+          duration: 1200, ease: 'Power1.easeOut',
+          onComplete: () => ring.destroy()
+        });
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BANKS  (left & right dirt banks)
+  // ══════════════════════════════════════════════════════════
+  _buildBanks() {
+    const bg = this.add.graphics().setDepth(8);
+
+    const drawBank = (x, w) => {
+      // Dirt fill
+      bg.fillStyle(C.bankDirt, 1);
+      bg.fillRect(x, RIVER_Y - 5, w, RIVER_H + 8);
+      // Top grass strip
+      bg.fillStyle(C.hillLt, 1);
+      bg.fillRect(x, RIVER_Y - 6, w, 7);
+      // Dark edge toward river
+    };
+
+    drawBank(0, BANK_W);
+    drawBank(W - BANK_W, BANK_W);
+
+    // Bank edge separators
+    bg.lineStyle(2, 0x3E2723, 0.7);
+    bg.lineBetween(BANK_W, RIVER_Y - 8, BANK_W, RIVER_Y + RIVER_H + 4);
+    bg.lineBetween(W - BANK_W, RIVER_Y - 8, W - BANK_W, RIVER_Y + RIVER_H + 4);
+
+    // Bridge anchor stones on each bank
+    [BANK_W - 6, W - BANK_W - 6].forEach(ax => {
+      bg.fillStyle(C.stone, 1);
+      bg.fillRect(ax, BRIDGE_Y - 12, 12, PLANK_H + 14);
+      bg.fillStyle(C.stoneLt, 0.6);
+      bg.fillRect(ax + 1, BRIDGE_Y - 12, 4, PLANK_H + 14);
+      bg.lineStyle(1, C.stoneDk, 0.5);
+      bg.strokeRect(ax, BRIDGE_Y - 12, 12, PLANK_H + 14);
+    });
+
+    // Bridge cables (rope guide lines, slightly sagging)
+    const cableG = this.add.graphics().setDepth(9);
+    cableG.lineStyle(1.5, 0xA1887F, 0.5);
+    const midX = W / 2;
+    const sag  = 10;
+    [BRIDGE_Y - 18, BRIDGE_Y + PLANK_H + 14].forEach(ry => {
+      const pts = [];
+      const steps = 40;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = BANK_W + t * (W - BANK_W * 2);
+        const y = ry + Math.sin(t * Math.PI) * sag;
+        pts.push({ x, y });
+      }
+      cableG.strokePoints(pts, false);
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BRIDGE GUIDE SLOTS  (ghost outlines + pillars)
+  // ══════════════════════════════════════════════════════════
+  _buildBridgeGuides() {
+    const gg = this.add.graphics().setDepth(7);
+
+    for (let i = 0; i < TOTAL_PLANKS; i++) {
+      const cx = plankCX(i);
+
+      // Stone pillar rising from river
+      gg.fillStyle(C.stoneDk, 1);
+      gg.fillRect(cx - 7, RIVER_Y + 6, 14, RIVER_H - 10);
+      gg.fillStyle(C.stone, 0.7);
+      gg.fillRect(cx - 5, RIVER_Y + 6, 5, RIVER_H - 10);
+      // Pillar cap
+      gg.fillStyle(C.stoneLt, 1);
+      gg.fillRect(cx - 9, BRIDGE_Y + PLANK_H - 2, 18, 6);
+
+      // Ghost slot outline (empty plank guide)
+      gg.lineStyle(1, 0xffffff, 0.15);
+      gg.strokeRect(cx - PLANK_W / 2, BRIDGE_Y, PLANK_W, PLANK_H);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HUD
+  // ══════════════════════════════════════════════════════════
+  _buildHUD() {
+    const g = this.add.graphics().setDepth(20);
+    // Score pill
+    g.fillStyle(0x000000, 0.52);
+    g.fillRoundedRect(8, 8, 140, 42, 11);
+    g.lineStyle(1.5, C.gold, 0.45);
+    g.strokeRoundedRect(8, 8, 140, 42, 11);
+    this._scoreTxt = this.add.text(20, 16, '⭐  0', {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setDepth(21);
+
+    // Progress pill
+    g.fillStyle(0x000000, 0.52);
+    g.fillRoundedRect(W - 148, 8, 140, 42, 11);
+    g.lineStyle(1.5, 0x8D6E63, 0.5);
+    g.strokeRoundedRect(W - 148, 8, 140, 42, 11);
+    this._progressTxt = this.add.text(W - 136, 16, '🪵  0 / 7', {
+      fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#BCAAA4'
+    }).setDepth(21);
+
+    // Title
+    this.add.text(W / 2, 57, '🏗️  Constructor de Puentes', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#1A237E'
+    }).setOrigin(0.5).setAlpha(0.88).setDepth(21);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  QUESTION PANEL  (wooden panel at bottom)
+  // ══════════════════════════════════════════════════════════
+  _buildPanel() {
+    const g = this.add.graphics().setDepth(18);
+    const ph = H - PANEL_Y;
+
+    // Drop shadow
+    g.fillStyle(0x000000, 0.45);
+    g.fillRect(0, PANEL_Y + 4, W, ph);
+
+    // Horizontal wood planks
+    for (let y = PANEL_Y; y < H; y += 20) {
+      const alt = Math.floor((y - PANEL_Y) / 20) % 2 === 0;
+      g.fillStyle(alt ? C.panelMid : C.panelBg, 1);
+      g.fillRect(0, y, W, 20);
+      // Grain line
+      g.lineStyle(1, alt ? 0x3E2723 : 0x2C1300, 0.4);
+      g.lineBetween(0, y, W, y);
+    }
+    // Knot circles for realism
+    [55, 380].forEach(kx => {
+      g.lineStyle(1.5, 0x3E2723, 0.28);
+      g.strokeEllipse(kx, PANEL_Y + 50, 22, 14);
+    });
+
+    // Top border (double)
+    g.lineStyle(6, C.plankLt, 1);
+    g.lineBetween(0, PANEL_Y, W, PANEL_Y);
+    g.lineStyle(1.5, C.gold, 0.38);
+    g.lineBetween(0, PANEL_Y + 7, W, PANEL_Y + 7);
+
+    // Nails on top border
+    [20, W / 2, W - 20].forEach(nx => {
+      g.fillStyle(C.stoneLt, 0.85);
+      g.fillCircle(nx, PANEL_Y + 2, 4.5);
+      g.fillStyle(0x000000, 0.3);
+      g.fillCircle(nx + 1, PANEL_Y + 3, 2.5);
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  EQUATION ROW  (□ + 3 = 8 display)
+  // ══════════════════════════════════════════════════════════
+  _buildEquationRow() {
+    const eqY = PANEL_Y + 34;
+    const cx  = W / 2;
+
+    // Sign board background
+    const sg = this.add.graphics().setDepth(19);
+    sg.fillStyle(0x000000, 0.48);
+    sg.fillRoundedRect(cx - 162, eqY - 14, 324, 66, 12);
+    sg.lineStyle(2, C.plankLt, 0.65);
+    sg.strokeRoundedRect(cx - 162, eqY - 14, 324, 66, 12);
+    sg.fillStyle(C.gold, 0.05);
+    sg.fillRoundedRect(cx - 160, eqY - 12, 320, 62, 11);
+
+    // Five tokens: left | op | right | = | result
+    // Widths: num=54, op=28 → total=54*3+28*2=218
+    const tkW = 54, opW = 28;
+    const totalW = tkW * 3 + opW * 2;
+    const sx = cx - totalW / 2;
+
+    const numStyle = col => ({
+      fontSize: '34px', fontFamily: 'Arial Black, sans-serif', color: col
+    });
+    const opStyle = () => ({
+      fontSize: '26px', fontFamily: 'Arial Black, sans-serif', color: '#BCAAA4'
+    });
+
+    this._eqLeft   = this.add.text(sx + tkW*0.5,                eqY+20, '□', numStyle('#FFD700')).setOrigin(0.5).setDepth(20);
+    this._eqOp     = this.add.text(sx + tkW + opW*0.5,          eqY+20, '+', opStyle()).setOrigin(0.5).setDepth(20);
+    this._eqRight  = this.add.text(sx + tkW + opW + tkW*0.5,    eqY+20, '?', numStyle('#ffffff')).setOrigin(0.5).setDepth(20);
+    this._eqEq     = this.add.text(sx + tkW*2 + opW + opW*0.5,  eqY+20, '=', opStyle()).setOrigin(0.5).setDepth(20);
+    this._eqResult = this.add.text(sx + tkW*2 + opW*2 + tkW*0.5, eqY+20, '?', numStyle('#ffffff')).setOrigin(0.5).setDepth(20);
+
+    // Feedback text below equation
+    this._fbTxt = this.add.text(cx, eqY + 64, '', {
+      fontSize: '15px', fontFamily: 'Arial Black, sans-serif',
+      color: '#00E676', stroke: '#000000', strokeThickness: 3, align: 'center'
+    }).setOrigin(0.5).setDepth(20).setAlpha(0);
+
+    this._eqY = eqY;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CHOICE BUTTONS  (3 answer options)
+  // ══════════════════════════════════════════════════════════
+  _buildChoiceButtons() {
+    const btnW   = 118, btnH = 72;
+    const gap    = 8;
+    const totalW = 3 * btnW + 2 * gap;
+    const sx     = (W - totalW) / 2;
+    const btnY   = PANEL_Y + 120;
+
+    this._choiceBtns = [];
+    for (let i = 0; i < 3; i++) {
+      const bx = sx + i * (btnW + gap);
+      this._choiceBtns.push(this._makeBtn(bx, btnY, btnW, btnH, i));
+    }
+
+    // TEKS badge
+    this.add.text(W / 2, PANEL_Y + 208, 'TEKS 1.3 · Números Desconocidos', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#8D6E63'
+    }).setOrigin(0.5).setDepth(19);
+  }
+
+  _makeBtn(x, y, w, h, idx) {
+    const base = C.btnBlue, hov = C.btnBluH;
+    const g = this.add.graphics().setDepth(19);
+
+    const draw = (col, dy = 0) => {
+      g.clear();
+      // Shadow
+      g.fillStyle(0x000000, 0.38);
+      g.fillRoundedRect(x + 3, y + 5 + dy, w, h, 13);
+      // Body
+      g.fillStyle(col, 1);
+      g.fillRoundedRect(x, y + dy, w, h, 13);
+      // Shine
+      g.fillStyle(0xffffff, 0.12);
+      g.fillRoundedRect(x + 4, y + dy + 4, w - 8, h * 0.38, { tl: 9, tr: 9, bl: 0, br: 0 });
+      // Border
+      g.lineStyle(2, 0x90CAF9, 0.5);
+      g.strokeRoundedRect(x, y + dy, w, h, 13);
+    };
+    draw(base);
+
+    const txt = this.add.text(x + w / 2, y + h / 2, '?', {
+      fontSize: '30px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(20);
+
+    const hit = this.add.rectangle(x + w / 2, y + h / 2, w, h)
+      .setInteractive().setDepth(21).setAlpha(0.001);
+    hit.on('pointerover',  () => { if (!this.isLocked) draw(hov); });
+    hit.on('pointerout',   () => draw(base));
+    hit.on('pointerdown',  () => { if (!this.isLocked) draw(hov, 3); });
+    hit.on('pointerup',    () => {
+      draw(base);
+      if (!this.isLocked) this._submitAnswer(this.choices[idx]);
+    });
+
+    return { g, txt, hit, draw, base };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CHARACTER  (animated walker emoji)
+  // ══════════════════════════════════════════════════════════
+  _buildCharacter() {
+    this._char = this.add.text(BANK_W / 2, CHAR_BASE_Y, '🧒', {
+      fontSize: '30px'
+    }).setOrigin(0.5).setDepth(12);
+    this._idleBob();
+  }
+
+  _idleBob() {
+    this.tweens.killTweensOf(this._char);
+    this.tweens.add({
+      targets: this._char, y: CHAR_BASE_Y - 4,
+      duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  GAME LOGIC
+  // ══════════════════════════════════════════════════════════
+  _nextPlank() {
+    this.equation = this._generateEq(this.plankIdx);
+    this.choices  = this._makeChoices(this.equation.answer);
+    this._updateDisplay();
+    this.isLocked = false;
+  }
+
+  _generateEq(idx) {
+    const hard = idx >= 3; // harder after plank 2
+    let type, unknownPos, known, result, answer;
+
+    if (!hard) {
+      // Addition only, sum ≤ 10
+      type       = 'add';
+      result     = rnd(4, 10);
+      known      = rnd(1, result - 1);
+      unknownPos = Math.random() < 0.5 ? 'left' : 'right';
+      answer     = result - known;
+    } else if (Math.random() < 0.55) {
+      // Addition, larger numbers
+      type       = 'add';
+      result     = rnd(5, 15);
+      known      = rnd(1, result - 1);
+      unknownPos = Math.random() < 0.5 ? 'left' : 'right';
+      answer     = result - known;
+    } else {
+      // Subtraction: known − □ = result
+      type       = 'sub';
+      unknownPos = 'right';
+      result     = rnd(2, 10);
+      known      = rnd(result + 1, result + 8);
+      answer     = known - result;
+    }
+
+    if (answer <= 0) return this._generateEq(idx); // retry
+    return { type, unknownPos, known, result, answer };
+  }
+
+  _makeChoices(correct) {
+    const s = new Set([correct]);
+    let tries = 0;
+    while (s.size < 3 && tries++ < 50) {
+      const offset = rnd(1, 4) * (Math.random() < 0.5 ? 1 : -1);
+      const c = correct + offset;
+      if (c > 0) s.add(c);
+    }
+    return Phaser.Utils.Array.Shuffle(Array.from(s));
+  }
+
+  _updateDisplay() {
+    const { type, unknownPos, known, result } = this.equation;
+    const op = type === 'add' ? '+' : '−';
+
+    if (unknownPos === 'left') {
+      this._eqLeft.setText('□').setColor('#FFD700').setFontSize('38px');
+      this._eqRight.setText('' + known).setColor('#ffffff').setFontSize('32px');
+    } else {
+      this._eqLeft.setText('' + known).setColor('#ffffff').setFontSize('32px');
+      this._eqRight.setText('□').setColor('#FFD700').setFontSize('38px');
+    }
+    this._eqOp.setText(op);
+    this._eqResult.setText('' + result);
+
+    // Bounce-in animation
+    [this._eqLeft, this._eqOp, this._eqRight, this._eqEq, this._eqResult].forEach((t, i) => {
+      this.tweens.add({
+        targets: t, scaleX: 1.15, scaleY: 1.15, duration: 110, yoyo: true, delay: i * 30, ease: 'Sine.easeOut'
+      });
+    });
+
+    // Update choice labels
+    this._choiceBtns.forEach((btn, i) => btn.txt.setText('' + this.choices[i]));
+  }
+
+  // ── Submit ─────────────────────────────────────────────────
+  _submitAnswer(value) {
+    if (this.isLocked) return;
+    this.isLocked = true;
+
+    if (value === this.equation.answer) {
+      this._onCorrect(value);
+    } else {
+      this._onWrong(value);
+    }
+  }
+
+  _onCorrect(value) {
+    const { unknownPos } = this.equation;
+    (unknownPos === 'left' ? this._eqLeft : this._eqRight)
+      .setText('' + value).setColor('#00E676').setFontSize('32px');
+
+    this.score += 10;
+    this._scoreTxt.setText('⭐  ' + this.score);
+    this._showFeedback('✓  ¡Correcto!', true);
+
+    // Drop plank then walk
+    this._dropPlank(this.plankIdx);
+    this.time.delayedCall(430, () => this._walkTo(this.plankIdx));
+
+    this.plankIdx++;
+    this._progressTxt.setText('🪵  ' + this.plankIdx + ' / ' + TOTAL_PLANKS);
+
+    if (this.plankIdx >= TOTAL_PLANKS) {
+      this.time.delayedCall(1300, () => this._completeLevel());
+    } else {
+      this.time.delayedCall(1200, () => this._nextPlank());
+    }
+  }
+
+  _onWrong(value) {
+    const { unknownPos } = this.equation;
+    (unknownPos === 'left' ? this._eqLeft : this._eqRight)
+      .setText('' + value).setColor('#FF5252').setFontSize('32px');
+
+    this._showFeedback('✗  ¡El tablón cayó al agua! 💧', false);
+    this._fallPlank(this.plankIdx);
+    this._choiceBtns.forEach(btn => this._shake(btn.txt));
+
+    // Red screen flash
+    const flash = this.add.rectangle(W / 2, H / 2, W, H, C.red, 0.13).setDepth(50);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 380, onComplete: () => flash.destroy() });
+
+    this.time.delayedCall(950, () => {
+      this._updateDisplay(); // restore □
+      this.isLocked = false;
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PLANK ANIMATIONS
+  // ══════════════════════════════════════════════════════════
+  _dropPlank(idx) {
+    const cx = plankCX(idx);
+    const pg = this.add.graphics().setDepth(10);
+    pg.x = cx;
+    pg.y = BRIDGE_Y - 130;
+
+    this._drawPlankGraphic(pg);
+
+    this.tweens.add({
+      targets: pg, y: BRIDGE_Y,
+      duration: 320, ease: 'Bounce.easeOut',
+      onComplete: () => {
+        this.placedPlanks.push(pg);
+        this._impactPuffs(cx, BRIDGE_Y);
+      }
+    });
+  }
+
+  _drawPlankGraphic(g) {
+    const hw = PLANK_W / 2, hh = PLANK_H;
+    // Main body
+    g.fillStyle(C.plank, 1);
+    g.fillRoundedRect(-hw, 0, PLANK_W, PLANK_H, 3);
+    // Top highlight
+    g.fillStyle(C.plankLt, 0.5);
+    g.fillRoundedRect(-hw + 2, 1, PLANK_W - 4, 4, 2);
+    // Grain lines (vertical)
+    g.lineStyle(1.5, C.plankLt, 0.4);
+    [-hw * 0.4, 0, hw * 0.4].forEach(gx => g.lineBetween(gx, 2, gx, hh - 2));
+    // Horizontal grain
+    g.lineStyle(1, C.plankDk, 0.4);
+    g.lineBetween(-hw + 4, hh / 2, hw - 4, hh / 2);
+    // Nails
+    [[-hw + 5, 4], [hw - 5, 4], [-hw + 5, hh - 4], [hw - 5, hh - 4]].forEach(([nx, ny]) => {
+      g.fillStyle(C.stoneDk, 0.85); g.fillCircle(nx, ny, 2.5);
+    });
+    // Bottom shadow
+    g.fillStyle(0x000000, 0.2);
+    g.fillRoundedRect(-hw, hh - 3, PLANK_W, 4, { tl: 0, tr: 0, bl: 3, br: 3 });
+  }
+
+  _fallPlank(idx) {
+    const cx = plankCX(idx);
+    const pg = this.add.graphics().setDepth(10);
+    pg.x = cx; pg.y = BRIDGE_Y;
+    this._drawPlankGraphic(pg);
+
+    this.tweens.add({
+      targets: pg,
+      y: RIVER_Y + RIVER_H * 0.55,
+      angle: rnd(28, 58) * (Math.random() < 0.5 ? 1 : -1),
+      alpha: 0.22,
+      duration: 560,
+      ease: 'Power2.easeIn',
+      onComplete: () => {
+        this._splash(cx, RIVER_Y + RIVER_H * 0.42);
+        pg.destroy();
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CHARACTER WALK
+  // ══════════════════════════════════════════════════════════
+  _walkTo(plankIdx) {
+    const targetX = plankCX(plankIdx);
+    this.tweens.killTweensOf(this._char);
+
+    this.tweens.add({
+      targets: this._char, x: targetX,
+      duration: 400, ease: 'Power1.easeInOut',
+      onUpdate: tw => {
+        this._char.y = CHAR_BASE_Y - Math.sin(tw.progress * Math.PI) * 20;
+      },
+      onComplete: () => {
+        this._char.y = CHAR_BASE_Y;
+        this._idleBob();
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  FX HELPERS
+  // ══════════════════════════════════════════════════════════
+  _splash(x, y) {
+    // Ripple rings
+    for (let i = 0; i < 5; i++) {
+      const ring = this.add.circle(x, y, 3, C.waterLt, 0.7).setDepth(14);
+      this.tweens.add({
+        targets: ring, scaleX: rnd(4, 9) + i*0.8, scaleY: rnd(1.5, 3) + i*0.3, alpha: 0,
+        duration: rnd(400, 680), delay: i * 55, ease: 'Power1.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+    // Water droplets
+    for (let i = 0; i < 12; i++) {
+      const drop = this.add.circle(
+        x + rndF(-18, 18), y,
+        rndF(2, 6), C.waterLt, 0.9
+      ).setDepth(15);
+      const angle = -Math.PI / 2 + rndF(-1.0, 1.0);
+      const speed = rnd(28, 85);
+      this.tweens.add({
+        targets: drop,
+        x: drop.x + Math.cos(angle) * speed,
+        y: drop.y + Math.sin(angle) * speed,
+        alpha: 0, scaleX: 0.3, scaleY: 0.3,
+        duration: rnd(300, 580), ease: 'Power2.easeOut',
+        onComplete: () => drop.destroy()
+      });
+    }
+    // Floating 💧 emoji
+    const em = this.add.text(x, y - 8, '💧', { fontSize: '26px' })
+      .setOrigin(0.5).setDepth(16);
+    this.tweens.add({
+      targets: em, y: y - 55, alpha: 0, duration: 750, ease: 'Power2.easeOut',
+      onComplete: () => em.destroy()
+    });
+  }
+
+  _impactPuffs(x, y) {
+    for (let i = 0; i < 8; i++) {
+      const puff = this.add.circle(
+        x + rndF(-22, 22), y + rndF(-4, 4),
+        rndF(3, 7), 0xBCAAA4, rndF(0.3, 0.6)
+      ).setDepth(13);
+      this.tweens.add({
+        targets: puff,
+        x: puff.x + rndF(-30, 30),
+        y: puff.y - rndF(14, 36),
+        alpha: 0, scaleX: 2.2, scaleY: 2.2,
+        duration: rnd(280, 520), ease: 'Power2.easeOut',
+        onComplete: () => puff.destroy()
+      });
+    }
+  }
+
+  _shake(obj) {
+    const ox = obj.x;
+    this.tweens.add({
+      targets: obj, x: { from: ox - 10, to: ox + 10 },
+      duration: 44, yoyo: true, repeat: 5, ease: 'Sine.easeInOut',
+      onComplete: () => { obj.x = ox; }
+    });
+  }
+
+  _showFeedback(msg, ok) {
+    this._fbTxt.setText(msg)
+      .setColor(ok ? '#00E676' : '#FF5252')
+      .setAlpha(1).setScale(1.1);
+    this.tweens.add({
+      targets: this._fbTxt,
+      scaleX: 1, scaleY: 1, alpha: 0,
+      duration: ok ? 1500 : 1100, delay: ok ? 380 : 80,
+      ease: 'Sine.easeIn'
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  LEVEL COMPLETE
+  // ══════════════════════════════════════════════════════════
+  _completeLevel() {
+    // Walk to right bank
+    this.tweens.killTweensOf(this._char);
+    this.tweens.add({
+      targets: this._char, x: W - BANK_W / 2,
+      duration: 700, ease: 'Power2.easeOut',
+      onUpdate: tw => {
+        this._char.y = CHAR_BASE_Y - Math.abs(Math.sin(tw.progress * Math.PI * 4)) * 14;
+      },
+      onComplete: () => {
+        this._char.y = CHAR_BASE_Y;
+        this.tweens.add({
+          targets: this._char,
+          angle: [-12, 12], duration: 180, yoyo: true, repeat: 5, ease: 'Sine.easeInOut'
+        });
+        this._launchConfetti();
+        this.time.delayedCall(450, () => this._showCompleteOverlay());
+      }
+    });
+  }
+
+  _launchConfetti() {
+    const palette = [C.gold, C.green, 0xFF6B6B, 0x4FC3F7, 0xCE93D8, 0xA5D6A7, 0xFFAFCC, 0x80DEEA];
+    for (let i = 0; i < 50; i++) {
+      const col = palette[i % palette.length];
+      const x = rnd(30, W - 30);
+      const piece = this.add.rectangle(x, -15, rnd(5, 12), rnd(4, 9), col, 1).setDepth(28);
+      this.tweens.add({
+        targets: piece,
+        y: H + 20, angle: rnd(-400, 400), x: x + rnd(-90, 90),
+        duration: rnd(1600, 3000), delay: rnd(0, 900),
+        ease: 'Power1.easeIn',
+        onComplete: () => piece.destroy()
+      });
+    }
+  }
+
+  _showCompleteOverlay() {
+    const cardW = 340, cardH = 310;
+    const cardX = (W - cardW) / 2, cardY = (H - cardH) / 2 - 20;
+
+    // Dim
+    const dim = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.48).setDepth(26);
+
+    // Card
+    const cg = this.add.graphics().setDepth(27);
+    cg.fillStyle(0x1565C0, 1);
+    cg.fillRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.lineStyle(4, C.gold, 0.95);
+    cg.strokeRoundedRect(cardX, cardY, cardW, cardH, 24);
+    cg.fillStyle(C.gold, 0.06);
+    cg.fillRoundedRect(cardX + 2, cardY + 2, cardW - 4, cardH - 4, 22);
+
+    const mid = cardX + cardW / 2;
+    let ty = cardY + 28;
+    this.add.text(mid, ty,      '🌉',               { fontSize: '62px'  }).setOrigin(0.5).setDepth(28); ty += 68;
+    this.add.text(mid, ty,      '¡Puente Completo!', { fontSize: '26px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff' }).setOrigin(0.5).setDepth(28); ty += 36;
+    this.add.text(mid, ty,      '¡Cruzaste el río!', { fontSize: '15px', fontFamily: 'Arial, sans-serif',       color: 'rgba(255,255,255,0.82)' }).setOrigin(0.5).setDepth(28); ty += 34;
+    this.add.text(mid, ty, 'Puntos:  ' + this.score, { fontSize: '22px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700' }).setOrigin(0.5).setDepth(28); ty += 44;
+
+    // Play-again button
+    const bg2 = this.add.graphics().setDepth(28);
+    const bx = mid - 95, bw = 190, bh = 50;
+    bg2.fillStyle(C.btnGrn, 1); bg2.fillRoundedRect(bx, ty, bw, bh, 13);
+    bg2.lineStyle(2, 0x81C784, 0.7); bg2.strokeRoundedRect(bx, ty, bw, bh, 13);
+    this.add.text(mid, ty + bh / 2, '🔄  Jugar de Nuevo', {
+      fontSize: '15px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(29);
+
+    const hitBtn = this.add.rectangle(mid, ty + bh / 2, bw, bh)
+      .setInteractive().setDepth(30).setAlpha(0.001);
+    hitBtn.on('pointerup', () => this.scene.restart());
+
+    // Entrance animation
+    const group = [dim, cg];
+    [dim, cg].forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: group, alpha: 1, duration: 280 });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Phaser config + boot
+// ══════════════════════════════════════════════════════════════
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#1a3a5c',
+  scene: [GameScene],
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
+  input: { touch: { capture: true } }
+});
+</script>
+</body>
+</html>
