@@ -50,14 +50,16 @@ class GameScene extends Phaser.Scene {
 
   // ── State ──────────────────────────────────────────────────
   init() {
-    this.score      = 0;
-    this.level      = 1;
-    this.target     = 10;
-    this.tiles      = [];       // array of TileData objects
-    this.selected   = null;     // currently tapped TileData
-    this.dragging   = false;
-    this.mx         = W / 2;    // magnet center X
-    this.my         = 208;      // magnet center Y
+    this.score               = 0;
+    this.level               = 1;
+    this.target              = 10;
+    this.tiles               = [];       // array of TileData objects
+    this.selected            = null;     // currently tapped TileData
+    this._wasActuallyDragged = false;    // true only when pointer moved during drag
+    this.pairsTotal          = 3;        // valid pairs per round (fixed)
+    this.pairsMatched        = 0;        // pairs matched this round
+    this.mx                  = W / 2;    // magnet center X
+    this.my                  = 208;      // magnet center Y
   }
 
   // ── Create ─────────────────────────────────────────────────
@@ -239,20 +241,38 @@ class GameScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   _hookDragEvents() {
     this.input.on('dragstart', (ptr, go) => {
-      this.dragging = true;
+      // Reset movement tracker at the very start of every pointer interaction
+      this._wasActuallyDragged = false;
       go.setDepth(30);
       this.tweens.add({ targets: go, scaleX: 1.15, scaleY: 1.15, duration: 80 });
     });
 
     this.input.on('drag', (ptr, go, dx, dy) => {
+      // Only flag as a real drag when the tile moves more than 12px from home
+      const td = go._td;
+      if (td && dist(dx, dy, td.hx, td.hy) > 12) {
+        this._wasActuallyDragged = true;
+      }
       go.x = dx; go.y = dy;
     });
 
     this.input.on('dragend', (ptr, go) => {
       go.setDepth(2);
       this.tweens.add({ targets: go, scaleX: 1, scaleY: 1, duration: 100 });
-      this._handleDrop(go);
-      this.time.delayedCall(30, () => { this.dragging = false; });
+      if (this._wasActuallyDragged) {
+        // Real drag → evaluate drop on magnet
+        this._handleDrop(go);
+      } else {
+        // Tap-like release → snap back; pointerup will call _handleTap
+        const td = go._td;
+        if (td) {
+          this.tweens.add({
+            targets: go, x: td.hx, y: td.hy,
+            duration: 150, ease: 'Back.easeOut'
+          });
+        }
+      }
+      // NOTE: do NOT reset _wasActuallyDragged here — pointerup reads it next
     });
   }
 
@@ -262,8 +282,9 @@ class GameScene extends Phaser.Scene {
   _startRound() {
     // Destroy old tiles
     this.tiles.forEach(td => td.container?.destroy());
-    this.tiles    = [];
-    this.selected = null;
+    this.tiles        = [];
+    this.selected     = null;
+    this.pairsMatched = 0;
 
     // Pick target
     const pool = [5,6,7,8,9,10,11,12,13,14,15];
@@ -350,9 +371,9 @@ class GameScene extends Phaser.Scene {
       con.on('pointerout',   () => { if (!td.matched && !td.selected) bg.setFillStyle(clr); });
 
       // Tap detection on pointerup
-      con.on('pointerup', ptr => {
-        const moved = dist(ptr.downX, ptr.downY, ptr.x, ptr.y);
-        if (moved < 14 && !this.dragging) this._handleTap(td);
+      // pointerup fires after dragend, so _wasActuallyDragged is already set correctly
+      con.on('pointerup', () => {
+        if (!this._wasActuallyDragged) this._handleTap(td);
       });
 
       // Entrance animation (cascade)
@@ -446,9 +467,10 @@ class GameScene extends Phaser.Scene {
     this._pulseMagnet();
     this._showFeedback(`${tdA.value} + ${tdB.value} = ${this.target}  ✓`, true);
 
-    // Check round complete
+    // Track matched pairs and advance when all VALID pairs are found
+    this.pairsMatched++;
     this.time.delayedCall(600, () => {
-      if (this.tiles.every(t => t.matched)) {
+      if (this.pairsMatched >= this.pairsTotal) {
         this.time.delayedCall(700, () => this._nextLevel());
       }
     });
