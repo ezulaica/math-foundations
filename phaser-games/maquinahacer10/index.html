@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🎰 La Máquina de Hacer 10 — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0d0025;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🎰  La Máquina de Hacer 10  —  Phaser 3.60
+   TEKS 1.3 · Estrategia "Hacer 10"
+   El alumno elige el complemento del número que muestra la
+   máquina para completar la suma hasta 10.
+   ============================================================ */
+
+const W = 480, H = 700;
+
+const C = {
+  bg1: 0x0d0025, bg2: 0x1a0040,
+  gold: 0xFFD700, orange: 0xFF8C00,
+  green: 0x00E676, red: 0xFF5252,
+  white: 0xffffff,
+  neon: 0xcc44ff,
+  padPurple: 0x5c2d91, padHov: 0x7b3fb5,
+  padDel: 0x8b1a1a, padDelHov: 0xb22222,
+  display: 0x000000,
+  woodDark: 0x2e1505, woodMid: 0x3d1f08, woodLight: 0x55290a,
+  chrome: 0x888888, chromeHi: 0xcccccc,
+};
+
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+const rndF = (a, b) => Phaser.Math.FloatBetween(a, b);
+
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score       = 0;
+    this.streak      = 0;
+    this.currentNum  = 5;
+    this.isSpinning  = false;
+    this.isLocked    = false;   // locked while showing feedback
+    this.spinTimer   = null;
+    this.padBtns     = [];
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildBg();
+    this._buildHUD();
+    this._buildMachine();
+    this._buildEquation();
+    this._buildFeedback();
+    this._buildNumPad();
+    // Kick off the first spin after tiles appear
+    this.time.delayedCall(400, () => this._spin());
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BACKGROUND
+  // ══════════════════════════════════════════════════════════
+  _buildBg() {
+    // Gradient fill via scanlines
+    const g = this.add.graphics();
+    for (let y = 0; y < H; y++) {
+      const t = y / H;
+      const r  = Math.round(Phaser.Math.Linear(13, 28, t));
+      const gg = Math.round(Phaser.Math.Linear(0,   8, t));
+      const b  = Math.round(Phaser.Math.Linear(37, 70, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Star field
+    for (let i = 0; i < 70; i++) {
+      const s = this.add.circle(rnd(0,W), rnd(0, H*0.75), rndF(0.4,2.2), C.white, rndF(0.3,1));
+      this.tweens.add({ targets: s, alpha: 0.04, yoyo: true, repeat: -1,
+        duration: rnd(800, 3200), delay: rnd(0, 2500) });
+    }
+
+    // Neon floor glow
+    const floorGlow = this.add.graphics();
+    floorGlow.fillStyle(C.neon, 0.04);
+    floorGlow.fillRect(0, H * 0.82, W, H * 0.18);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HUD
+  // ══════════════════════════════════════════════════════════
+  _buildHUD() {
+    // Score pill
+    const sg = this.add.graphics();
+    sg.fillStyle(0x000000, 0.5); sg.fillRoundedRect(8, 8, 140, 42, 11);
+    sg.lineStyle(1.5, C.gold, 0.4); sg.strokeRoundedRect(8, 8, 140, 42, 11);
+    this._scoreTxt = this.add.text(20, 16, '⭐  0', {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    });
+
+    // Streak pill (hidden when streak < 2)
+    const streakG = this.add.graphics();
+    this._streakPillG = streakG;
+    this._streakTxt = this.add.text(W/2, 18, '', {
+      fontSize: '18px', fontFamily: 'Arial Black, sans-serif', color: '#FF8C00'
+    }).setOrigin(0.5).setAlpha(0);
+
+    // Level / title
+    const lg = this.add.graphics();
+    lg.fillStyle(0x000000, 0.5); lg.fillRoundedRect(W-148, 8, 140, 42, 11);
+    lg.lineStyle(1.5, C.neon, 0.35); lg.strokeRoundedRect(W-148, 8, 140, 42, 11);
+    this._correctTxt = this.add.text(W - 78, 16, '🎯  0 / 0', {
+      fontSize: '16px', fontFamily: 'Arial Black, sans-serif', color: '#cc88ff'
+    }).setOrigin(0.5);
+    this._totalCorrect = 0;
+    this._totalAttempts = 0;
+
+    // Sub-title
+    this.add.text(W/2, 57, '🎰  La Máquina de Hacer 10', {
+      fontSize: '13px', fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setAlpha(0.8);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  MACHINE CABINET
+  // ══════════════════════════════════════════════════════════
+  _buildMachine() {
+    const cx = W / 2;
+    const CAB_X = 38, CAB_Y = 76, CAB_W = W - 76, CAB_H = 256;
+
+    const g = this.add.graphics();
+
+    // ── Shadow ──
+    g.fillStyle(0x000000, 0.55);
+    g.fillRoundedRect(CAB_X + 7, CAB_Y + 9, CAB_W, CAB_H, 22);
+
+    // ── Wood body (three layers for depth) ──
+    [C.woodDark, C.woodMid, C.woodLight].forEach((col, i) => {
+      if (i < 2) {
+        g.fillStyle(col, 1);
+        g.fillRoundedRect(CAB_X + i*2, CAB_Y + i*2, CAB_W - i*4, CAB_H - i*4, 22 - i*3);
+      }
+    });
+    // Top highlight strip
+    g.fillStyle(C.woodLight, 1);
+    g.fillRoundedRect(CAB_X + 2, CAB_Y + 2, CAB_W - 4, 12, { tl:20, tr:20, bl:0, br:0 });
+
+    // ── Gold border ──
+    g.lineStyle(4, C.gold, 0.95);
+    g.strokeRoundedRect(CAB_X, CAB_Y, CAB_W, CAB_H, 22);
+    // Inner accent
+    g.lineStyle(1.5, C.gold, 0.22);
+    g.strokeRoundedRect(CAB_X + 8, CAB_Y + 8, CAB_W - 16, CAB_H - 16, 15);
+
+    // ── Neon sign box ──
+    g.fillStyle(0x000000, 0.7);
+    g.fillRoundedRect(cx - 110, CAB_Y + 14, 220, 28, 8);
+    g.lineStyle(2, C.gold, 0.75);
+    g.strokeRoundedRect(cx - 110, CAB_Y + 14, 220, 28, 8);
+    // Neon glow behind sign text
+    g.fillStyle(C.gold, 0.06);
+    g.fillRoundedRect(cx - 108, CAB_Y + 15, 216, 26, 7);
+
+    // ── Reel window ──
+    const RX = CAB_X + 36, RY = CAB_Y + 56, RW = CAB_W - 72, RH = 116;
+    // Bezel
+    g.fillStyle(0x111111, 1);
+    g.fillRoundedRect(RX - 4, RY - 4, RW + 8, RH + 8, 14);
+    // Screen
+    g.fillStyle(C.display, 1);
+    g.fillRoundedRect(RX, RY, RW, RH, 10);
+    // CRT scanlines
+    g.lineStyle(1, 0x0044aa, 0.09);
+    for (let sy = RY + 3; sy < RY + RH; sy += 5) g.lineBetween(RX, sy, RX + RW, sy);
+    // Screen glow
+    g.fillStyle(0x4488ff, 0.05);
+    g.fillRoundedRect(RX, RY, RW, RH, 10);
+    // Glass glare (top-left shine)
+    g.fillStyle(C.white, 0.07);
+    g.fillRoundedRect(RX + 5, RY + 5, RW * 0.45, RH * 0.38, 6);
+    // Screen border
+    g.lineStyle(2, 0x3355aa, 0.7);
+    g.strokeRoundedRect(RX, RY, RW, RH, 10);
+
+    // ── Divider stripe ──
+    g.fillStyle(C.gold, 0.28);
+    g.fillRect(CAB_X + 12, RY + RH + 8, CAB_W - 24, 2);
+
+    this._RX = RX; this._RY = RY; this._RW = RW; this._RH = RH;
+    this._CAB_X = CAB_X; this._CAB_Y = CAB_Y; this._CAB_W = CAB_W; this._CAB_H = CAB_H;
+
+    // ── Neon sign text ──
+    this.add.text(cx, CAB_Y + 28, '★  HACER 10  ★', {
+      fontSize: '14px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setOrigin(0.5).setDepth(2);
+
+    // ── Big reel number ──
+    this._reelNum = this.add.text(cx, RY + RH / 2 + 4, '?', {
+      fontSize: '90px', fontFamily: 'Arial Black, Impact, sans-serif',
+      color: '#FFD700', stroke: '#FF6600', strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5);
+
+    // Drop-shadow clone for the reel number
+    this._reelShadow = this.add.text(cx + 3, RY + RH / 2 + 9, '?', {
+      fontSize: '90px', fontFamily: 'Arial Black, Impact, sans-serif',
+      color: '#220000', stroke: '#000000', strokeThickness: 2
+    }).setOrigin(0.5).setDepth(4).setAlpha(0.35);
+
+    // Mask so the number doesn't overflow the reel window
+    const maskShape = this.add.graphics();
+    maskShape.fillRoundedRect(RX, RY, RW, RH, 10);
+    const mask = maskShape.createGeometryMask();
+    this._reelNum.setMask(mask);
+    this._reelShadow.setMask(mask);
+
+    // ── Blinking border lights ──
+    const lights = this._ringLights(CAB_X, CAB_Y, CAB_W, CAB_H, 28);
+    lights.forEach((pos, i) => {
+      const bulb = this.add.circle(pos.x, pos.y, 5, C.gold, 1).setDepth(3);
+      // Inner bright dot
+      this.add.circle(pos.x, pos.y, 2, C.white, 0.9).setDepth(4);
+      this.tweens.add({
+        targets: bulb, alpha: 0.08,
+        duration: rnd(220, 400), yoyo: true, repeat: -1, delay: i * 68
+      });
+    });
+
+    // ── Side decorative rivets ──
+    [[CAB_X + 14, CAB_Y + 34], [CAB_X + 14, CAB_Y + CAB_H - 20],
+     [CAB_X + CAB_W - 14, CAB_Y + 34], [CAB_X + CAB_W - 14, CAB_Y + CAB_H - 20]]
+    .forEach(([rx, ry]) => {
+      const rvt = this.add.graphics().setDepth(3);
+      rvt.fillStyle(C.chromeHi, 0.9); rvt.fillCircle(rx, ry, 5);
+      rvt.fillStyle(C.chrome, 0.7);   rvt.fillCircle(rx + 1, ry + 1, 3);
+    });
+  }
+
+  _ringLights(x, y, w, h, count) {
+    const r = 18; // inset from edge
+    const positions = [];
+    const inX = x + r, inY = y + r, inW = w - r*2, inH = h - r*2;
+    const perimeter = 2 * (inW + inH);
+    const step = perimeter / count;
+    for (let i = 0; i < count; i++) {
+      const d = i * step;
+      let px, py;
+      if      (d < inW)           { px = inX + d;             py = inY; }
+      else if (d < inW + inH)     { px = inX + inW;           py = inY + (d - inW); }
+      else if (d < 2*inW + inH)   { px = inX + inW - (d - inW - inH); py = inY + inH; }
+      else                         { px = inX;                 py = inY + inH - (d - 2*inW - inH); }
+      positions.push({ x: px, y: py });
+    }
+    return positions;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  EQUATION DISPLAY (inside cabinet lower half)
+  // ══════════════════════════════════════════════════════════
+  _buildEquation() {
+    const cx = W / 2;
+    const eqY = this._CAB_Y + this._RH + 80; // below reel + divider
+
+    // Container row: [N] [+] [□] [=] [10]
+    const slotSize = 54;
+    const gap      = 8;
+    const tokens   = 5; // N, +, □, =, 10
+    const totalW   = tokens * slotSize + (tokens - 1) * gap;
+    const startX   = cx - totalW / 2;
+
+    // Helper: draw a number tile
+    const makeTile = (xi, yi, label, col, isBig) => {
+      const tg = this.add.graphics().setDepth(5);
+      tg.fillStyle(col, 0.25);
+      tg.fillRoundedRect(xi, yi, slotSize, slotSize, 10);
+      tg.lineStyle(2, col, 0.7);
+      tg.strokeRoundedRect(xi, yi, slotSize, slotSize, 10);
+      const txt = this.add.text(xi + slotSize/2, yi + slotSize/2, label, {
+        fontSize: isBig ? '32px' : '28px',
+        fontFamily: 'Arial Black, sans-serif',
+        color: Phaser.Display.Color.IntegerToRGB(col)
+          ? '#' + col.toString(16).padStart(6,'0') : '#ffffff'
+      }).setOrigin(0.5).setDepth(6);
+      return { tg, txt };
+    };
+
+    // Operator token (no box, just text)
+    const makeOp = (xi, yi, sym) => {
+      return this.add.text(xi + slotSize/2, yi + slotSize/2, sym, {
+        fontSize: '28px', fontFamily: 'Arial Black, sans-serif', color: '#aaaacc'
+      }).setOrigin(0.5).setDepth(5);
+    };
+
+    const py = eqY;
+
+    // [N] tile — number shown by machine (updates on spin)
+    const numTileG = this.add.graphics().setDepth(5);
+    this._numTileG = numTileG;
+    this._numTileT = this.add.text(startX + slotSize/2, py + slotSize/2, '?', {
+      fontSize: '32px', fontFamily: 'Arial Black, sans-serif', color: '#FF8C00'
+    }).setOrigin(0.5).setDepth(6);
+    this._drawNumTile();
+
+    // [+]
+    makeOp(startX + slotSize + gap, py, '+');
+
+    // [□] answer slot
+    const ansX = startX + (slotSize + gap) * 2;
+    this._ansSlotG = this.add.graphics().setDepth(5);
+    this._drawAnsSlot('neutral');
+    this._ansTxt = this.add.text(ansX + slotSize/2, py + slotSize/2, '□', {
+      fontSize: '32px', fontFamily: 'Arial Black, sans-serif', color: '#8888cc'
+    }).setOrigin(0.5).setDepth(6);
+    this._ansX = ansX; this._ansY = py;
+
+    // [=]
+    makeOp(startX + (slotSize + gap) * 3, py, '=');
+
+    // [10]
+    const tenX = startX + (slotSize + gap) * 4;
+    const tenG = this.add.graphics().setDepth(5);
+    tenG.fillStyle(C.gold, 0.22); tenG.fillRoundedRect(tenX, py, slotSize, slotSize, 10);
+    tenG.lineStyle(2, C.gold, 0.8); tenG.strokeRoundedRect(tenX, py, slotSize, slotSize, 10);
+    this.add.text(tenX + slotSize/2, py + slotSize/2, '10', {
+      fontSize: '28px', fontFamily: 'Arial Black, sans-serif', color: '#FFD700'
+    }).setOrigin(0.5).setDepth(6);
+
+    this._eqY = py;
+  }
+
+  _drawNumTile() {
+    const { _CAB_X: cx, _RH: rh, _CAB_Y: cy } = this;
+    const eqY = cy + rh + 80;
+    const slotSize = 54;
+    const totalW = 5 * slotSize + 4 * 8;
+    const startX = W/2 - totalW/2;
+    const g = this._numTileG;
+    g.clear();
+    g.fillStyle(C.orange, 0.22);
+    g.fillRoundedRect(startX, eqY, slotSize, slotSize, 10);
+    g.lineStyle(2, C.orange, 0.8);
+    g.strokeRoundedRect(startX, eqY, slotSize, slotSize, 10);
+  }
+
+  _drawAnsSlot(state) {
+    const { _ansX: ax, _ansY: ay } = this;
+    const slotSize = 54;
+    const g = this._ansSlotG;
+    g.clear();
+    const col = state === 'correct' ? C.green : state === 'wrong' ? C.red : 0x8888cc;
+    const alpha = state === 'neutral' ? 0.18 : 0.3;
+    g.fillStyle(col, alpha);
+    g.fillRoundedRect(ax, ay, slotSize, slotSize, 10);
+    g.lineStyle(state === 'neutral' ? 1.5 : 3, col, state === 'neutral' ? 0.5 : 1);
+    g.strokeRoundedRect(ax, ay, slotSize, slotSize, 10);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  FEEDBACK TEXT
+  // ══════════════════════════════════════════════════════════
+  _buildFeedback() {
+    this._fbTxt = this.add.text(W/2, this._eqY + 72, '', {
+      fontSize: '17px', fontFamily: 'Arial Black, sans-serif',
+      color: '#00e676', stroke: '#000000', strokeThickness: 4,
+      align: 'center'
+    }).setOrigin(0.5).setAlpha(0).setDepth(10);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  NUMBER PAD
+  // ══════════════════════════════════════════════════════════
+  _buildNumPad() {
+    const cols    = 3;
+    const btnW    = 114, btnH    = 64;
+    const gapX    = 12,  gapY    = 12;
+    const totalBW = cols * btnW + (cols-1) * gapX;
+    const startX  = (W - totalBW) / 2;
+    const startY  = this._eqY + 110;
+
+    // 3×3 grid of 1–9
+    for (let n = 1; n <= 9; n++) {
+      const col = (n - 1) % cols;
+      const row = Math.floor((n - 1) / cols);
+      const bx  = startX + col * (btnW + gapX);
+      const by  = startY + row * (btnH + gapY);
+      this._makeBtn(bx, by, btnW, btnH, '' + n, false, () => this._submitAnswer(n));
+    }
+
+    // DEL button (full width row)
+    const delY = startY + 3 * (btnH + gapY);
+    this._makeBtn(startX, delY, totalBW, 52, '⌫  Borrar', true, () => this._clearAnswer());
+
+    // TEKS badge
+    this.add.text(W/2, delY + 64, 'TEKS 1.3 · Estrategia Hacer 10', {
+      fontSize: '11px', fontFamily: 'Arial, sans-serif', color: '#7766aa'
+    }).setOrigin(0.5);
+  }
+
+  _makeBtn(x, y, w, h, label, isDel, callback) {
+    const baseCol  = isDel ? C.padDel    : C.padPurple;
+    const hovCol   = isDel ? C.padDelHov : C.padHov;
+    const rimCol   = isDel ? 0xff4444    : C.neon;
+
+    const g = this.add.graphics().setDepth(7);
+    const drawBtn = (col, dy = 0) => {
+      g.clear();
+      // Shadow
+      g.fillStyle(0x000000, 0.4);
+      g.fillRoundedRect(x + 3, y + 5 + dy, w, h, 12);
+      // Body
+      g.fillStyle(col, 1);
+      g.fillRoundedRect(x, y + dy, w, h, 12);
+      // Shine strip
+      g.fillStyle(C.white, 0.12);
+      g.fillRoundedRect(x + 4, y + dy + 4, w - 8, h * 0.38, { tl:8, tr:8, bl:0, br:0 });
+      // Border glow
+      g.lineStyle(2, rimCol, 0.55);
+      g.strokeRoundedRect(x, y + dy, w, h, 12);
+    };
+
+    drawBtn(baseCol);
+
+    const txt = this.add.text(x + w/2, y + h/2, label, {
+      fontSize: isDel ? '16px' : '26px',
+      fontFamily: 'Arial Black, sans-serif', color: '#ffffff'
+    }).setOrigin(0.5).setDepth(8);
+
+    // Hit zone
+    const hit = this.add.rectangle(x + w/2, y + h/2, w, h).setInteractive().setDepth(9).setAlpha(0.001);
+    hit.on('pointerover',  () => { if (!this.isLocked && !this.isSpinning) { drawBtn(hovCol); } });
+    hit.on('pointerout',   () => { drawBtn(baseCol); });
+    hit.on('pointerdown',  () => { if (!this.isLocked && !this.isSpinning) drawBtn(hovCol, 3); });
+    hit.on('pointerup',    () => {
+      drawBtn(baseCol);
+      if (!this.isLocked && !this.isSpinning) callback();
+    });
+
+    this.padBtns.push({ g, txt, hit, drawBtn, baseCol });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  SPIN ANIMATION
+  // ══════════════════════════════════════════════════════════
+  _spin() {
+    this.isSpinning = true;
+    this.isLocked   = true;
+
+    // Reset answer slot
+    this._ansTxt.setText('□').setColor('#8888cc');
+    this._drawAnsSlot('neutral');
+
+    // Pick new number (different from current)
+    let next;
+    do { next = rnd(1, 9); } while (next === this.currentNum && Math.random() > 0.1);
+    this.currentNum = next;
+
+    // Scroll reel (rapid number cycling)
+    const cx   = W / 2;
+    const midY = this._RY + this._RH / 2 + 4;
+    let tick = 0;
+    const nums = [1,2,3,4,5,6,7,8,9];
+    const totalTicks = 14;
+
+    // Start with question marks on both shadow and main
+    this._reelNum.setText('?').setY(midY - 40).setAlpha(0);
+    this._reelShadow.setText('?').setY(midY - 40 + 5).setAlpha(0);
+
+    // Rapid-cycle ticker
+    const spinLoop = this.time.addEvent({
+      delay: 55,
+      repeat: totalTicks - 1,
+      callback: () => {
+        tick++;
+        const display = nums[tick % nums.length];
+        this._reelNum.setText('' + display).setAlpha(rndF(0.3, 0.9));
+        this._reelShadow.setText('' + display).setAlpha(rndF(0.1, 0.3));
+
+        // Speed lines (blur dots)
+        for (let i = 0; i < 3; i++) {
+          const bx = this._RX + rnd(10, this._RW - 10);
+          const by = this._RY + rnd(4, this._RH - 4);
+          const bl = this.add.rectangle(bx, by, rnd(20,60), 2, C.gold, rndF(0.1,0.3)).setDepth(6);
+          this.tweens.add({ targets: bl, alpha: 0, scaleX: 0.2, duration: 100,
+            onComplete: () => bl.destroy() });
+        }
+
+        // On last tick: reveal final number with animation
+        if (tick >= totalTicks) {
+          this._reelNum.setText('' + next).setAlpha(1).setY(midY - 50);
+          this._reelShadow.setText('' + next).setAlpha(0.35).setY(midY - 50 + 5);
+
+          // Bounce in
+          this.tweens.add({
+            targets: [this._reelNum, this._reelShadow],
+            y: (obj) => obj === this._reelNum ? midY : midY + 5,
+            ease: 'Back.easeOut', duration: 280,
+            onComplete: () => {
+              // Subtle glow pulse
+              this.tweens.add({
+                targets: this._reelNum,
+                scaleX: 1.08, scaleY: 1.08, duration: 120,
+                yoyo: true, ease: 'Sine.easeOut'
+              });
+            }
+          });
+
+          // Update equation [N] tile
+          this._numTileT.setText('' + next);
+
+          // Unlock after the bounce lands
+          this.time.delayedCall(340, () => {
+            this.isSpinning = false;
+            this.isLocked   = false;
+          });
+        }
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  ANSWER SUBMISSION
+  // ══════════════════════════════════════════════════════════
+  _submitAnswer(n) {
+    if (this.isLocked || this.isSpinning) return;
+    this.isLocked = true;
+    this._totalAttempts++;
+
+    const correct = 10 - this.currentNum;
+
+    // Show chosen answer in slot
+    this._ansTxt.setText('' + n);
+
+    if (n === correct) {
+      // ── CORRECT ──────────────────────────────────────────
+      this.streak++;
+      this._totalCorrect++;
+      const bonus = this.streak >= 5 ? 30 : this.streak >= 3 ? 20 : 10;
+      this.score += bonus;
+      this._scoreTxt.setText('⭐  ' + this.score);
+      this._correctTxt.setText('🎯  ' + this._totalCorrect + ' / ' + this._totalAttempts);
+
+      this._ansTxt.setColor('#00E676');
+      this._drawAnsSlot('correct');
+
+      // Score pop
+      this._scorePop('+' + bonus, true);
+
+      // Streak display
+      this._updateStreak();
+
+      // Feedback message
+      const msg = this.streak >= 5
+        ? `🔥 COMBO x${this.streak}!  ${this.currentNum} + ${correct} = 10`
+        : `✓  ${this.currentNum} + ${correct} = 10`;
+      this._showFeedback(msg, true);
+
+      // Particle burst on equation slot
+      this._burst(this._ansX + 27, this._ansY + 27);
+
+      // Slot scale pop
+      this.tweens.add({
+        targets: [this._ansSlotG, this._ansTxt],
+        scaleX: 1.18, scaleY: 1.18, duration: 130, yoyo: true, ease: 'Sine.easeOut'
+      });
+
+      // Spin again after delay
+      this.time.delayedCall(1100, () => this._spin());
+
+    } else {
+      // ── WRONG ────────────────────────────────────────────
+      this.streak = 0;
+      this._updateStreak();
+      this._ansTxt.setColor('#FF5252');
+      this._drawAnsSlot('wrong');
+
+      this._showFeedback(`✗  ${this.currentNum} + ? = 10  —  inténtalo de nuevo`, false);
+      this._shake(this._ansTxt);
+      this._shake(this._ansSlotG);
+
+      // Flash screen red
+      const flash = this.add.rectangle(W/2, H/2, W, H, C.red, 0.12).setDepth(50);
+      this.tweens.add({ targets: flash, alpha: 0, duration: 350,
+        onComplete: () => flash.destroy() });
+
+      // Clear and unlock for retry
+      this.time.delayedCall(900, () => {
+        this._ansTxt.setText('□').setColor('#8888cc');
+        this._drawAnsSlot('neutral');
+        this.isLocked = false;
+      });
+    }
+  }
+
+  _clearAnswer() {
+    if (this.isSpinning) return;
+    this._ansTxt.setText('□').setColor('#8888cc');
+    this._drawAnsSlot('neutral');
+    this.isLocked = false;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  STREAK DISPLAY
+  // ══════════════════════════════════════════════════════════
+  _updateStreak() {
+    if (this.streak >= 2) {
+      const flame = this.streak >= 5 ? '🔥🔥🔥' : this.streak >= 3 ? '🔥🔥' : '🔥';
+      this._streakTxt.setText(flame + '  ' + this.streak).setAlpha(1);
+      // Pulse
+      this.tweens.add({
+        targets: this._streakTxt, scaleX: 1.2, scaleY: 1.2,
+        duration: 120, yoyo: true, ease: 'Sine.easeOut'
+      });
+    } else {
+      this._streakTxt.setAlpha(0);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  FX HELPERS
+  // ══════════════════════════════════════════════════════════
+  _showFeedback(msg, ok) {
+    this._fbTxt.setText(msg)
+      .setColor(ok ? '#00e676' : '#ff5252')
+      .setAlpha(1).setScale(1.15);
+    this.tweens.add({
+      targets: this._fbTxt,
+      scaleX: 1, scaleY: 1, alpha: 0,
+      duration: ok ? 1600 : 1200, delay: ok ? 450 : 100,
+      ease: 'Sine.easeIn'
+    });
+  }
+
+  _scorePop(label, ok) {
+    const pop = this.add.text(W - 60, 58, label, {
+      fontSize: '20px', fontFamily: 'Arial Black, sans-serif',
+      color: ok ? '#00e676' : '#ff5252',
+      stroke: '#000000', strokeThickness: 3
+    }).setOrigin(0.5).setDepth(20);
+    this.tweens.add({
+      targets: pop, y: 30, alpha: 0, duration: 900, ease: 'Power2.easeOut',
+      onComplete: () => pop.destroy()
+    });
+  }
+
+  _shake(obj) {
+    const ox = obj.x;
+    this.tweens.add({
+      targets: obj, x: { from: ox - 10, to: ox + 10 },
+      duration: 45, yoyo: true, repeat: 5, ease: 'Sine.easeInOut',
+      onComplete: () => { obj.x = ox; }
+    });
+  }
+
+  _burst(x, y) {
+    const pal = [C.gold, C.green, 0x4ECDC4, 0xA8E6CF, 0xFFAFCC, 0x6BCEFF, 0x96E6A1, C.orange];
+    for (let i = 0; i < 20; i++) {
+      const c  = pal[i % pal.length];
+      const sz = rnd(3, 10);
+      const p  = this.add.circle(x, y, sz, c).setDepth(15);
+      const a  = (i / 20) * Math.PI * 2;
+      const sp = rnd(50, 140);
+      this.tweens.add({
+        targets: p, x: x + Math.cos(a)*sp, y: y + Math.sin(a)*sp,
+        alpha: 0, scaleX: 0, scaleY: 0,
+        duration: rnd(380, 720), ease: 'Power2.easeOut',
+        onComplete: () => p.destroy()
+      });
+    }
+    // Ring pulses
+    for (let i = 0; i < 4; i++) {
+      const ring = this.add.circle(x, y, 2, C.gold, 0.7).setDepth(14);
+      this.tweens.add({
+        targets: ring, scaleX: rnd(5, 12), scaleY: rnd(5, 12), alpha: 0,
+        duration: rnd(280, 480), delay: i * 55, ease: 'Power1.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Config + Boot
+// ══════════════════════════════════════════════════════════════
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#0d0025',
+  scene: [GameScene],
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
+  input: { touch: { capture: true } }
+});
+</script>
+</body>
+</html>
