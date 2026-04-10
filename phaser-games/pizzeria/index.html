@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🍕 La Pizzería de Partes Iguales — Math Foundations</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #1a0a00;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<script>
+/* ============================================================
+   🍕  La Pizzería de Partes Iguales  —  Phaser 3.60
+   TEKS 1.6G · Partes Iguales (Mitades, Tercios, Cuartos)
+   Clientes piden fracciones · el alumno corta la pizza en
+   partes iguales seleccionando el número correcto de partes.
+   Niveles: Mitades → Tercios → Cuartos → Mezcla
+   ============================================================ */
+
+const W = 480, H = 700;
+
+// ── Palette ──────────────────────────────────────────────────
+const C = {
+  bgTop:    0x8B1A00, bgMid:  0xC13000, bgBot:  0x6B0F00,
+  counter:  0x3E1C00, wood:   0x6B3A00, woodHi: 0xA0622A,
+  crust:    0xD4873C, crustD: 0xA0622A,
+  cheese:   0xFFD966, cheeseD:0xE6B800,
+  sauce:    0xC0392B,
+  tomatoR:  0xE74C3C, tomatoD:0xC0392B,
+  olive:    0x2C3E50, oliveH: 0x5D6D7E,
+  pepper:   0x27AE60, pepperD:0x1E8449,
+  panelBg:  0x1A0500,
+  btnRed:   0xC0392B, btnRedH:0xE74C3C,
+  btnGreen: 0x27AE60, btnGrnH:0x2ECC71,
+  btnGold:  0xE6AC00, btnGldH:0xFFD700,
+  btnBlue:  0x1A6FA8, btnBluH:0x2196F3,
+  gold:     0xFFD700, white:  0xFFFFFF,
+  dark:     0x1A0500, green:  0x00E676, red: 0xFF5252,
+  hud:      0x3E1C00, hudBrd: 0x8B4513,
+};
+
+// ── Fraction definitions ──────────────────────────────────────
+const FRACTIONS = {
+  2: { label: '½',    name: 'mitades',   spanish: 'la mitad',   color: 0xE74C3C, btnColor: C.btnRed  },
+  3: { label: '⅓',    name: 'tercios',   spanish: 'un tercio',  color: 0x2196F3, btnColor: C.btnBlue },
+  4: { label: '¼',    name: 'cuartos',   spanish: 'un cuarto',  color: 0x27AE60, btnColor: C.btnGreen},
+};
+
+// ── Customer names & dialog ───────────────────────────────────
+const CUSTOMERS = [
+  { name: 'Sofía',  emoji: '👧', color: 0xFF9FB5 },
+  { name: 'Tomás',  emoji: '👦', color: 0x81D4FA },
+  { name: 'Abuela', emoji: '👵', color: 0xFFCC80 },
+  { name: 'Chef',   emoji: '👨‍🍳', color: 0xCCCCCC },
+  { name: 'Niña',   emoji: '🧒', color: 0xCE93D8 },
+];
+
+const rnd  = (a, b) => Phaser.Math.Between(a, b);
+
+// ── Level structure ───────────────────────────────────────────
+// rounds per level, which fractions appear
+const LEVELS = [
+  { fractions: [2],      rounds: 4, title: 'Nivel 1: Mitades'  },
+  { fractions: [3],      rounds: 4, title: 'Nivel 2: Tercios'  },
+  { fractions: [4],      rounds: 4, title: 'Nivel 3: Cuartos'  },
+  { fractions: [2,3,4],  rounds: 6, title: 'Nivel 4: ¡Mezcla!' },
+];
+
+// ══════════════════════════════════════════════════════════════
+class BootScene extends Phaser.Scene {
+  constructor() { super({ key: 'BootScene' }); }
+  create() {
+    // Draw all textures programmatically
+    this._makePizzaTexture();
+    this._makeCustomerTextures();
+    this._makeSliceTextures();
+    this.scene.start('TitleScene');
+  }
+
+  _makePizzaTexture() {
+    // Full pizza texture (radius 90)
+    const R = 90;
+    const g = this.make.graphics({ add: false });
+
+    // Crust outer ring
+    g.fillStyle(C.crustD, 1);
+    g.fillCircle(R+4, R+4, R+4);
+    g.fillStyle(C.crust, 1);
+    g.fillCircle(R+4, R+4, R+4);
+
+    // Cheese base
+    g.fillStyle(C.cheese, 1);
+    g.fillCircle(R+4, R+4, R-4);
+
+    // Sauce dots (tomato sauce swirl illusion)
+    g.fillStyle(C.sauce, 0.5);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const r2 = R * 0.55;
+      g.fillCircle(R+4 + Math.cos(a)*r2, R+4 + Math.sin(a)*r2, 14);
+    }
+    g.fillCircle(R+4, R+4, 18);
+
+    // Tomato slices
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + 0.3;
+      const r2 = R * 0.45;
+      const cx = R+4 + Math.cos(a)*r2, cy = R+4 + Math.sin(a)*r2;
+      g.fillStyle(C.tomatoR, 1); g.fillCircle(cx, cy, 10);
+      g.fillStyle(C.tomatoD, 1); g.fillCircle(cx, cy, 10);
+      // Segment lines
+      g.fillStyle(0xFFFFFF, 0.3);
+      for (let s = 0; s < 4; s++) {
+        const sa = s * Math.PI/4;
+        g.fillRect(cx + Math.cos(sa)*2 - 1, cy + Math.sin(sa)*2 - 1, 5, 1);
+      }
+    }
+
+    // Olives
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + 1.0;
+      const r2 = R * 0.6;
+      const cx = R+4 + Math.cos(a)*r2, cy = R+4 + Math.sin(a)*r2;
+      g.fillStyle(C.olive, 1); g.fillEllipse(cx, cy, 14, 10);
+      g.fillStyle(C.oliveH, 0.5); g.fillEllipse(cx-2, cy-2, 6, 4);
+    }
+
+    // Peppers
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.7;
+      const r2 = R * 0.3;
+      const cx = R+4 + Math.cos(a)*r2, cy = R+4 + Math.sin(a)*r2;
+      g.fillStyle(C.pepper, 1); g.fillEllipse(cx, cy, 12, 6);
+    }
+
+    // Sheen
+    g.fillStyle(0xFFFFFF, 0.08);
+    g.fillEllipse(R+4 - R*0.25, R+4 - R*0.25, R*0.6, R*0.4);
+
+    g.generateTexture('pizza_full', (R+4)*2, (R+4)*2);
+    g.destroy();
+  }
+
+  _makeCustomerTextures() {
+    // Simple chef counter (placeholder — we'll draw customers inline)
+    const g = this.make.graphics({ add: false });
+    g.fillStyle(0xFFFFFF, 1);
+    g.fillRect(0, 0, 1, 1);
+    g.generateTexture('pixel', 1, 1);
+    g.destroy();
+  }
+
+  _makeSliceTextures() {
+    // We'll draw slices dynamically in the game scene
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+class TitleScene extends Phaser.Scene {
+  constructor() { super({ key: 'TitleScene' }); }
+
+  create() {
+    // Gradient background
+    const g = this.add.graphics();
+    for (let y = 0; y < H; y++) {
+      const t = y / H;
+      const r = Math.round(Phaser.Math.Linear(139, 107, t));
+      const gg = Math.round(Phaser.Math.Linear(26, 10, t));
+      const b = Math.round(Phaser.Math.Linear(0, 0, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Brick pattern
+    const brick = this.add.graphics();
+    brick.lineStyle(1, 0x6B0F00, 0.4);
+    for (let row = 0; row < 20; row++) {
+      const off = (row % 2 === 0) ? 0 : 36;
+      for (let col = -1; col < 9; col++) {
+        brick.strokeRect(col * 72 + off, row * 32, 70, 30);
+      }
+    }
+
+    // Sign board
+    const sign = this.add.graphics();
+    sign.fillStyle(C.wood, 1);
+    sign.fillRoundedRect(30, 60, W-60, 180, 16);
+    sign.lineStyle(4, C.woodHi, 1);
+    sign.strokeRoundedRect(30, 60, W-60, 180, 16);
+
+    // Sign nails
+    for (const [nx, ny] of [[44,74],[W-44,74],[44,226],[W-44,226]]) {
+      sign.fillStyle(0x888888, 1); sign.fillCircle(nx, ny, 6);
+      sign.fillStyle(0xBBBBBB, 1); sign.fillCircle(nx-1, ny-1, 2);
+    }
+
+    // Title text
+    this.add.text(W/2, 118, '🍕', { fontSize: '60px' }).setOrigin(0.5);
+    this.add.text(W/2, 178, 'La Pizzería de', {
+      fontSize: '22px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B3A00', strokeThickness: 4,
+    }).setOrigin(0.5);
+    this.add.text(W/2, 210, 'Partes Iguales', {
+      fontSize: '26px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B3A00', strokeThickness: 5,
+    }).setOrigin(0.5);
+
+    this.add.text(W/2, 262, 'TEKS 1.6G · Partes Iguales', {
+      fontSize: '12px', fontFamily: 'Arial',
+      color: '#FFCC80', stroke: '#3E1C00', strokeThickness: 3,
+    }).setOrigin(0.5);
+
+    // Decorative mini pizzas
+    for (let i = 0; i < 3; i++) {
+      this.add.text(60 + i * 160, 310, '🍕', { fontSize: '32px' }).setOrigin(0.5);
+    }
+
+    // Instructions panel
+    const panel = this.add.graphics();
+    panel.fillStyle(0x000000, 0.45);
+    panel.fillRoundedRect(30, 340, W-60, 180, 12);
+
+    const instrLines = [
+      '📋 Cómo jugar:',
+      '• Un cliente pide una fracción de pizza',
+      '• Elige cuántas partes iguales necesita',
+      '• ¡Corta la pizza correctamente!',
+      '• Gana estrellas y avanza de nivel ⭐',
+    ];
+    instrLines.forEach((line, i) => {
+      this.add.text(W/2, 358 + i*28, line, {
+        fontSize: i === 0 ? '15px' : '13px',
+        fontFamily: 'Arial',
+        fontStyle: i === 0 ? 'bold' : 'normal',
+        color: '#FFFFFF',
+      }).setOrigin(0.5);
+    });
+
+    // Play button
+    const btnBg = this.add.graphics();
+    btnBg.fillStyle(C.btnRed, 1);
+    btnBg.fillRoundedRect(W/2 - 100, 548, 200, 56, 28);
+    btnBg.lineStyle(3, C.gold, 1);
+    btnBg.strokeRoundedRect(W/2 - 100, 548, 200, 56, 28);
+
+    const btnTxt = this.add.text(W/2, 576, '¡JUGAR! 🍕', {
+      fontSize: '22px', fontFamily: 'Arial Black', color: '#FFD700',
+      stroke: '#6B0000', strokeThickness: 4,
+    }).setOrigin(0.5);
+
+    // Interactive zone
+    const zone = this.add.zone(W/2, 576, 200, 56).setInteractive({ cursor: 'pointer' });
+    zone.on('pointerover', () => {
+      btnBg.clear();
+      btnBg.fillStyle(C.btnRedH, 1);
+      btnBg.fillRoundedRect(W/2-100, 548, 200, 56, 28);
+      btnBg.lineStyle(3, C.gold, 1);
+      btnBg.strokeRoundedRect(W/2-100, 548, 200, 56, 28);
+      this.tweens.add({ targets: [btnBg, btnTxt], scaleX: 1.04, scaleY: 1.04, duration: 100 });
+    });
+    zone.on('pointerout', () => {
+      btnBg.clear();
+      btnBg.fillStyle(C.btnRed, 1);
+      btnBg.fillRoundedRect(W/2-100, 548, 200, 56, 28);
+      btnBg.lineStyle(3, C.gold, 1);
+      btnBg.strokeRoundedRect(W/2-100, 548, 200, 56, 28);
+      this.tweens.add({ targets: [btnBg, btnTxt], scaleX: 1, scaleY: 1, duration: 100 });
+    });
+    zone.on('pointerdown', () => {
+      this.cameras.main.fadeOut(300, 0, 0, 0);
+      this.time.delayedCall(300, () => this.scene.start('GameScene'));
+    });
+
+    this.cameras.main.fadeIn(400, 0, 0, 0);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── State ──────────────────────────────────────────────────
+  init() {
+    this.score        = 0;
+    this.stars        = 0;
+    this.levelIdx     = 0;
+    this.roundInLevel = 0;
+    this.correctParts = 2;
+    this.isLocked     = false;
+    this.customer     = null;
+    this.cutGraphics  = null;
+    this.sliceGraphics = [];
+  }
+
+  // ── Create ─────────────────────────────────────────────────
+  create() {
+    this._buildBackground();
+    this._buildCounter();
+    this._buildHUD();
+    this._buildPizzaArea();
+    this._buildAnswerPanel();
+    this._buildCustomerArea();
+    this._nextRound();
+    this.cameras.main.fadeIn(400, 0, 0, 0);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  BACKGROUND — pizzeria walls + floor
+  // ══════════════════════════════════════════════════════════
+  _buildBackground() {
+    const g = this.add.graphics().setDepth(0);
+
+    // Wall gradient
+    for (let y = 0; y < 500; y++) {
+      const t = y / 500;
+      const r = Math.round(Phaser.Math.Linear(178, 120, t));
+      const gg = Math.round(Phaser.Math.Linear(52, 20, t));
+      const b = Math.round(Phaser.Math.Linear(0, 0, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Floor
+    g.fillStyle(0x3E1C00, 1); g.fillRect(0, 500, W, 200);
+    g.fillStyle(0x4E2800, 1);
+    for (let x = 0; x < W; x += 40) {
+      for (let y = 500; y < 700; y += 40) {
+        if ((Math.floor(x/40) + Math.floor((y-500)/40)) % 2 === 0)
+          g.fillRect(x, y, 40, 40);
+      }
+    }
+
+    // Brick wall pattern
+    g.lineStyle(1, 0x6B0F00, 0.5);
+    for (let row = 0; row < 15; row++) {
+      const off = (row % 2 === 0) ? 0 : 48;
+      for (let col = -1; col < 6; col++) {
+        g.strokeRect(col * 96 + off, row * 32, 94, 30);
+      }
+    }
+
+    // Menu board on wall
+    g.fillStyle(0x1A0500, 0.8);
+    g.fillRoundedRect(W-175, 10, 165, 95, 8);
+    g.lineStyle(2, C.woodHi, 1);
+    g.strokeRoundedRect(W-175, 10, 165, 95, 8);
+
+    this.add.text(W-90, 20, '📋 MENÚ', {
+      fontSize: '12px', fontFamily: 'Arial Black', color: '#FFD700'
+    }).setOrigin(0.5).setDepth(1);
+
+    const menuItems = ['½ Mitad • 2 partes', '⅓ Tercio • 3 partes', '¼ Cuarto • 4 partes'];
+    menuItems.forEach((item, i) => {
+      this.add.text(W-92, 38 + i*18, item, {
+        fontSize: '10px', fontFamily: 'Arial', color: '#FFCC80'
+      }).setOrigin(0.5).setDepth(1);
+    });
+
+    // Decorative elements
+    this.add.text(20, 20, '🌶️', { fontSize: '22px' }).setDepth(1);
+    this.add.text(50, 22, '🧅', { fontSize: '18px' }).setDepth(1);
+    this.add.text(80, 20, '🫒', { fontSize: '18px' }).setDepth(1);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  COUNTER — the pizza counter / bar
+  // ══════════════════════════════════════════════════════════
+  _buildCounter() {
+    const g = this.add.graphics().setDepth(2);
+
+    // Counter top
+    g.fillStyle(C.wood, 1);
+    g.fillRect(0, 470, W, 45);
+    // Edge highlight
+    g.fillStyle(C.woodHi, 1);
+    g.fillRect(0, 470, W, 6);
+    // Shadow under
+    g.fillStyle(0x000000, 0.3);
+    g.fillRect(0, 514, W, 6);
+    // Wood grain lines
+    g.lineStyle(1, C.crustD, 0.25);
+    for (let x = 0; x < W; x += 18) {
+      g.lineBetween(x, 470, x + 8, 515);
+    }
+
+    // Pizza plate / mat on counter
+    g.fillStyle(0xF5F5F5, 1);
+    g.fillCircle(W/2, 472, 108);
+    g.lineStyle(3, 0xDDDDDD, 1);
+    g.strokeCircle(W/2, 472, 108);
+    // Inner plate ring
+    g.lineStyle(2, 0xEEEEEE, 0.6);
+    g.strokeCircle(W/2, 472, 96);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  HUD — score, stars, level
+  // ══════════════════════════════════════════════════════════
+  _buildHUD() {
+    // Score panel
+    const hud = this.add.graphics().setDepth(5);
+    hud.fillStyle(C.hud, 0.92);
+    hud.fillRoundedRect(6, 110, 130, 54, 10);
+    hud.lineStyle(2, C.hudBrd, 1);
+    hud.strokeRoundedRect(6, 110, 130, 54, 10);
+
+    this.add.text(18, 118, 'Puntos', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#FFCC80'
+    }).setDepth(5);
+    this.scoreTxt = this.add.text(18, 133, '0', {
+      fontSize: '22px', fontFamily: 'Arial Black', color: '#FFD700',
+      stroke: '#6B0000', strokeThickness: 3,
+    }).setDepth(5);
+
+    // Stars panel
+    const sp = this.add.graphics().setDepth(5);
+    sp.fillStyle(C.hud, 0.92);
+    sp.fillRoundedRect(6, 170, 130, 40, 10);
+    sp.lineStyle(2, C.hudBrd, 1);
+    sp.strokeRoundedRect(6, 170, 130, 40, 10);
+
+    this.starsTxt = this.add.text(18, 180, '⭐⭐⭐⭐⭐', {
+      fontSize: '13px', fontFamily: 'Arial',
+    }).setDepth(5);
+
+    // Level panel
+    const lp = this.add.graphics().setDepth(5);
+    lp.fillStyle(C.hud, 0.92);
+    lp.fillRoundedRect(W-160, 110, 154, 54, 10);
+    lp.lineStyle(2, C.hudBrd, 1);
+    lp.strokeRoundedRect(W-160, 110, 154, 54, 10);
+
+    this.levelTxt = this.add.text(W-84, 118, 'Nivel 1', {
+      fontSize: '11px', fontFamily: 'Arial Black', color: '#FFCC80',
+    }).setOrigin(0.5, 0).setDepth(5);
+
+    this.progressTxt = this.add.text(W-84, 135, '', {
+      fontSize: '11px', fontFamily: 'Arial', color: '#FFFFFF',
+    }).setOrigin(0.5, 0).setDepth(5);
+
+    // Round progress dots
+    this.dotContainer = this.add.container(W-84, 154).setDepth(5);
+  }
+
+  _updateHUD() {
+    this.scoreTxt.setText(this.score);
+    const filled = Math.min(this.stars, 10);
+    this.starsTxt.setText('⭐'.repeat(filled) + '✩'.repeat(Math.max(0, 5 - filled)));
+    const lvl = LEVELS[this.levelIdx];
+    this.levelTxt.setText(lvl ? `Nivel ${this.levelIdx + 1}` : '¡Final!');
+
+    // Round dots
+    this.dotContainer.removeAll(true);
+    if (lvl) {
+      const total = lvl.rounds;
+      const dotW = 14, gap = 4;
+      const totalW = total * dotW + (total-1) * gap;
+      const startX = -totalW / 2;
+      for (let i = 0; i < total; i++) {
+        const dot = this.add.graphics();
+        const filled2 = i < this.roundInLevel;
+        dot.fillStyle(filled2 ? C.gold : 0x555555, 1);
+        dot.fillCircle(startX + i*(dotW+gap) + dotW/2, 0, dotW/2);
+        this.dotContainer.add(dot);
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  PIZZA AREA
+  // ══════════════════════════════════════════════════════════
+  _buildPizzaArea() {
+    // Pizza image (centered on counter)
+    this.pizzaImg = this.add.image(W/2, 372, 'pizza_full')
+      .setDepth(3)
+      .setScale(1.08);
+
+    // Cut lines graphics (drawn on top of pizza)
+    this.cutGraphics = this.add.graphics().setDepth(4);
+  }
+
+  _drawCutLines(parts) {
+    this.cutGraphics.clear();
+    this.cutGraphics.lineStyle(3, 0xFFFFFF, 0.9);
+    const cx = W/2, cy = 372, R = 95;
+    for (let i = 0; i < parts; i++) {
+      const angle = (i / parts) * Math.PI * 2 - Math.PI/2;
+      this.cutGraphics.lineBetween(cx, cy, cx + Math.cos(angle)*R, cy + Math.sin(angle)*R);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CUSTOMER AREA
+  // ══════════════════════════════════════════════════════════
+  _buildCustomerArea() {
+    // Customer container (top area)
+    this.customerContainer = this.add.container(0, 0).setDepth(6);
+  }
+
+  _showCustomer(parts) {
+    // Clear old customer
+    this.customerContainer.removeAll(true);
+
+    const cust = CUSTOMERS[rnd(0, CUSTOMERS.length - 1)];
+    const frac = FRACTIONS[parts];
+
+    // Background bubble for customer zone
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.35);
+    bg.fillRoundedRect(8, 220, W - 16, 128, 14);
+    bg.lineStyle(2, frac.color, 0.7);
+    bg.strokeRoundedRect(8, 220, W - 16, 128, 14);
+    this.customerContainer.add(bg);
+
+    // Customer emoji (big)
+    const custEmoji = this.add.text(54, 283, cust.emoji, {
+      fontSize: '52px',
+    }).setOrigin(0.5);
+    this.customerContainer.add(custEmoji);
+
+    // Bounce animation on customer
+    this.tweens.add({
+      targets: custEmoji,
+      y: 277, duration: 600, ease: 'Sine.InOut', yoyo: true, repeat: -1
+    });
+
+    // Speech bubble
+    const sbg = this.add.graphics();
+    sbg.fillStyle(0xFFFDE7, 1);
+    sbg.fillRoundedRect(95, 232, W - 112, 100, 12);
+    sbg.lineStyle(2.5, frac.color, 1);
+    sbg.strokeRoundedRect(95, 232, W - 112, 100, 12);
+    // Speech bubble tail
+    sbg.fillStyle(0xFFFDE7, 1);
+    sbg.fillTriangle(90, 270, 103, 258, 103, 282);
+    sbg.lineStyle(2.5, frac.color, 1);
+    sbg.lineBetween(90, 270, 103, 258);
+    sbg.lineBetween(90, 270, 103, 282);
+    this.customerContainer.add(sbg);
+
+    // Order text line 1
+    const line1 = this.add.text(W/2 + 6, 248,
+      `¡Hola! Soy ${cust.name} 👋`, {
+        fontSize: '12px', fontFamily: 'Arial', color: '#5D4037',
+      }).setOrigin(0.5, 0);
+    this.customerContainer.add(line1);
+
+    // Order text line 2 — the fraction ask
+    const fracTxt = this.add.text(W/2 + 6, 268,
+      `Quiero ${frac.spanish} de pizza.`, {
+        fontSize: '14px', fontFamily: 'Arial Black', color: '#B71C1C',
+      }).setOrigin(0.5, 0);
+    this.customerContainer.add(fracTxt);
+
+    // Big fraction symbol
+    const fracSym = this.add.text(W/2 + 6, 290, frac.label, {
+      fontSize: '28px', fontFamily: 'Arial Black', color: '#E65100',
+      stroke: '#6B0000', strokeThickness: 3,
+    }).setOrigin(0.5, 0);
+    this.customerContainer.add(fracSym);
+
+    // Question line
+    const q = this.add.text(W/2 + 6, 322,
+      `¿En cuántas partes corto la pizza?`, {
+        fontSize: '11px', fontFamily: 'Arial', color: '#4E342E', fontStyle: 'italic',
+      }).setOrigin(0.5, 0);
+    this.customerContainer.add(q);
+
+    // Slide in animation
+    this.customerContainer.setAlpha(0);
+    this.customerContainer.x = -30;
+    this.tweens.add({
+      targets: this.customerContainer,
+      alpha: 1, x: 0,
+      duration: 350, ease: 'Back.Out',
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  ANSWER PANEL — bottom buttons
+  // ══════════════════════════════════════════════════════════
+  _buildAnswerPanel() {
+    this.answerPanel = this.add.container(0, 0).setDepth(7);
+
+    // Panel background
+    const pb = this.add.graphics();
+    pb.fillStyle(C.panelBg, 0.97);
+    pb.fillRoundedRect(0, 525, W, 175, { tl: 20, tr: 20, bl: 0, br: 0 });
+    pb.lineStyle(3, C.hudBrd, 1);
+    pb.strokeRoundedRect(0, 525, W, 175, { tl: 20, tr: 20, bl: 0, br: 0 });
+    this.answerPanel.add(pb);
+
+    // Instruction label
+    this.panelLabel = this.add.text(W/2, 540, '¿Cuántas partes iguales necesita?', {
+      fontSize: '14px', fontFamily: 'Arial Black', color: '#FFCC80',
+    }).setOrigin(0.5, 0);
+    this.answerPanel.add(this.panelLabel);
+
+    // Buttons: 2, 3, 4 parts
+    this.answerBtns = [];
+    const btnData = [
+      { parts: 2, label: '2\nMitades', color: C.btnRed,   hi: C.btnRedH  },
+      { parts: 3, label: '3\nTercios', color: C.btnBlue,  hi: C.btnBluH  },
+      { parts: 4, label: '4\nCuartos', color: C.btnGreen, hi: C.btnGrnH  },
+    ];
+
+    btnData.forEach((bd, i) => {
+      const bx = 60 + i * 130, by = 575;
+      const bw = 110, bh = 90;
+
+      const btnGfx = this.add.graphics();
+      const drawBtn = (hover) => {
+        btnGfx.clear();
+        // Shadow
+        btnGfx.fillStyle(0x000000, 0.4);
+        btnGfx.fillRoundedRect(bx - bw/2 + 3, by + 3, bw, bh, 16);
+        // Main
+        btnGfx.fillStyle(hover ? bd.hi : bd.color, 1);
+        btnGfx.fillRoundedRect(bx - bw/2, by, bw, bh, 16);
+        // Top shine
+        btnGfx.fillStyle(0xFFFFFF, 0.15);
+        btnGfx.fillRoundedRect(bx - bw/2, by, bw, bh/2, { tl: 16, tr: 16, bl: 0, br: 0 });
+        // Border
+        btnGfx.lineStyle(2, 0xFFFFFF, 0.35);
+        btnGfx.strokeRoundedRect(bx - bw/2, by, bw, bh, 16);
+      };
+      drawBtn(false);
+
+      // Pizza fraction preview (mini)
+      const pvGfx = this.add.graphics();
+      const drawPreview = () => {
+        pvGfx.clear();
+        const pr = 26;
+        pvGfx.fillStyle(C.crust, 1);
+        pvGfx.fillCircle(bx, by + 30, pr);
+        pvGfx.fillStyle(C.cheese, 1);
+        pvGfx.fillCircle(bx, by + 30, pr - 5);
+        pvGfx.fillStyle(C.sauce, 0.5);
+        pvGfx.fillCircle(bx, by + 30, 10);
+        // Cut lines
+        pvGfx.lineStyle(2, 0xFFFFFF, 0.9);
+        for (let s = 0; s < bd.parts; s++) {
+          const ang = (s / bd.parts) * Math.PI * 2 - Math.PI/2;
+          pvGfx.lineBetween(bx, by+30, bx + Math.cos(ang)*pr, by+30 + Math.sin(ang)*pr);
+        }
+      };
+      drawPreview();
+
+      const btnTxt = this.add.text(bx, by + 65, bd.label, {
+        fontSize: '14px', fontFamily: 'Arial Black',
+        color: '#FFFFFF', align: 'center',
+        stroke: '#000000', strokeThickness: 3,
+      }).setOrigin(0.5, 0);
+
+      const zone = this.add.zone(bx, by + bh/2, bw, bh).setInteractive({ cursor: 'pointer' });
+      zone.on('pointerover', () => { drawBtn(true); this.tweens.add({ targets: [btnGfx, pvGfx, btnTxt], scaleX: 1.05, scaleY: 1.05, duration: 80 }); });
+      zone.on('pointerout', () => { drawBtn(false); this.tweens.add({ targets: [btnGfx, pvGfx, btnTxt], scaleX: 1, scaleY: 1, duration: 80 }); });
+      zone.on('pointerdown', () => {
+        if (!this.isLocked) this._handleAnswer(bd.parts);
+      });
+
+      this.answerPanel.add(btnGfx);
+      this.answerPanel.add(pvGfx);
+      this.answerPanel.add(btnTxt);
+      this.answerPanel.add(zone);
+      this.answerBtns.push({ gfx: btnGfx, pv: pvGfx, txt: btnTxt, zone, drawBtn, parts: bd.parts });
+    });
+
+    // Feedback text
+    this.feedbackTxt = this.add.text(W/2, 540, '', {
+      fontSize: '18px', fontFamily: 'Arial Black',
+      color: '#00E676', stroke: '#003300', strokeThickness: 4,
+    }).setOrigin(0.5, 0).setAlpha(0);
+    this.answerPanel.add(this.feedbackTxt);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  ROUND LOGIC
+  // ══════════════════════════════════════════════════════════
+  _nextRound() {
+    this.isLocked = false;
+    this.cutGraphics.clear();
+
+    // Clear slices
+    this.sliceGraphics.forEach(s => s.destroy());
+    this.sliceGraphics = [];
+
+    // Reset pizza
+    this.pizzaImg.setAlpha(1).setScale(1.08).setAngle(0).setPosition(W/2, 372);
+
+    // Check level bounds
+    if (this.levelIdx >= LEVELS.length) {
+      this._showWinScreen();
+      return;
+    }
+
+    const lvl = LEVELS[this.levelIdx];
+    if (this.roundInLevel >= lvl.rounds) {
+      // Advance to next level
+      this.levelIdx++;
+      this.roundInLevel = 0;
+      if (this.levelIdx >= LEVELS.length) {
+        this._showWinScreen();
+        return;
+      }
+      this._showLevelBanner();
+      return;
+    }
+
+    // Pick a fraction for this round
+    const opts = LEVELS[this.levelIdx].fractions;
+    this.correctParts = opts[rnd(0, opts.length - 1)];
+
+    this._showCustomer(this.correctParts);
+    this._updateHUD();
+
+    // Animate pizza in
+    this.pizzaImg.setAlpha(0).setScale(0.5);
+    this.tweens.add({
+      targets: this.pizzaImg,
+      alpha: 1, scale: 1.08,
+      duration: 400, ease: 'Back.Out',
+    });
+  }
+
+  _handleAnswer(parts) {
+    if (this.isLocked) return;
+    this.isLocked = true;
+
+    if (parts === this.correctParts) {
+      this._onCorrect(parts);
+    } else {
+      this._onWrong(parts);
+    }
+  }
+
+  _onCorrect(parts) {
+    // Draw cut lines
+    this._drawCutLines(parts);
+
+    // Points
+    const pts = parts === 4 ? 30 : parts === 3 ? 20 : 10;
+    this.score += pts;
+    this.stars = Math.min(10, this.stars + 1);
+    this.roundInLevel++;
+    this._updateHUD();
+
+    // Feedback
+    this._showFeedback('¡Correcto! 🎉', '#00E676');
+
+    // Slice fly animation
+    this.time.delayedCall(400, () => {
+      this._animateSlice(parts);
+    });
+  }
+
+  _animateSlice(parts) {
+    // Remove one slice (fly toward customer)
+    const cx = W/2, cy = 372, R = 90;
+    const startAngle = -Math.PI/2;
+    const sliceAngle = (2 * Math.PI) / parts;
+
+    // Draw the detaching slice
+    const sg = this.add.graphics().setDepth(8);
+    const a0 = startAngle, a1 = startAngle + sliceAngle;
+
+    sg.fillStyle(C.cheese, 1);
+    sg.beginPath();
+    sg.moveTo(cx, cy);
+    sg.arc(cx, cy, R-5, a0, a1, false);
+    sg.closePath();
+    sg.fillPath();
+
+    sg.fillStyle(C.sauce, 0.5);
+    sg.beginPath();
+    sg.moveTo(cx, cy);
+    sg.arc(cx, cy, R * 0.55, a0, a1, false);
+    sg.closePath();
+    sg.fillPath();
+
+    sg.lineStyle(2, C.crust, 1);
+    sg.strokeCircle(cx, cy, R-5);
+
+    sg.lineStyle(2, 0xFFFFFF, 0.8);
+    sg.lineBetween(cx, cy, cx + Math.cos(a0)*(R-5), cy + Math.sin(a0)*(R-5));
+    sg.lineBetween(cx, cy, cx + Math.cos(a1)*(R-5), cy + Math.sin(a1)*(R-5));
+
+    this.sliceGraphics.push(sg);
+
+    // Fly the slice toward customer area
+    this.tweens.add({
+      targets: sg,
+      x: -120, y: -200,
+      alpha: 0,
+      scaleX: 0.4, scaleY: 0.4,
+      duration: 600,
+      ease: 'Quad.In',
+      onComplete: () => {
+        sg.destroy();
+        // Pizza shrinks to show it's been served
+        this.tweens.add({
+          targets: this.pizzaImg,
+          scaleX: 1.08 * (1 - 1/parts * 0.15),
+          scaleY: 1.08 * (1 - 1/parts * 0.15),
+          duration: 200,
+        });
+
+        // Customer celebrate
+        this._customerCelebrate();
+
+        this.time.delayedCall(800, () => this._nextRound());
+      }
+    });
+  }
+
+  _customerCelebrate() {
+    // Flash the customer container
+    this.tweens.add({
+      targets: this.customerContainer,
+      scaleX: 1.06, scaleY: 1.06,
+      duration: 150, ease: 'Sine.Out', yoyo: true,
+    });
+
+    // Floating score popup
+    const frac = FRACTIONS[this.correctParts];
+    const pts = this.correctParts === 4 ? 30 : this.correctParts === 3 ? 20 : 10;
+    const pop = this.add.text(W/2, 370, `+${pts} pts! ✨`, {
+      fontSize: '26px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B0000', strokeThickness: 5,
+    }).setOrigin(0.5).setDepth(10).setAlpha(0);
+
+    this.tweens.add({
+      targets: pop,
+      y: 280, alpha: 1,
+      duration: 300, ease: 'Back.Out',
+      onComplete: () => {
+        this.tweens.add({
+          targets: pop,
+          y: 220, alpha: 0, duration: 500,
+          onComplete: () => pop.destroy(),
+        });
+      }
+    });
+
+    // Confetti
+    for (let i = 0; i < 14; i++) {
+      const colors = ['#FFD700','#FF5252','#00E676','#2196F3','#FF9800'];
+      const conf = this.add.text(
+        rnd(60, W-60), rnd(250, 420),
+        ['⭐','🎉','✨','🌟','💫'][rnd(0,4)],
+        { fontSize: `${rnd(14,26)}px` }
+      ).setDepth(10).setAlpha(0);
+
+      this.tweens.add({
+        targets: conf, alpha: 1, y: `-=${rnd(60,120)}`,
+        duration: rnd(500, 900), ease: 'Quad.Out',
+        onComplete: () => {
+          this.tweens.add({
+            targets: conf, alpha: 0, duration: 300,
+            onComplete: () => conf.destroy(),
+          });
+        }
+      });
+    }
+  }
+
+  _onWrong(parts) {
+    // Shake pizza
+    this.tweens.add({
+      targets: this.pizzaImg,
+      x: W/2 - 12, duration: 60, ease: 'Sine.InOut', yoyo: true,
+      repeat: 5,
+      onComplete: () => { this.pizzaImg.x = W/2; },
+    });
+
+    // Flash cut lines (wrong)
+    this._drawCutLines(parts);
+    this.cutGraphics.lineStyle(3, 0xFF5252, 0.9);
+    this._drawCutLines(parts);
+
+    this._showFeedback('¡Inténtalo de nuevo! 🍕', '#FF5252');
+
+    this.time.delayedCall(1000, () => {
+      this.cutGraphics.clear();
+      this._showFeedback('', '');
+      this.isLocked = false;
+    });
+  }
+
+  _showFeedback(msg, color) {
+    this.panelLabel.setAlpha(msg ? 0 : 1);
+    this.feedbackTxt.setText(msg).setColor(color).setAlpha(msg ? 1 : 0);
+    if (msg) {
+      this.tweens.add({
+        targets: this.feedbackTxt,
+        scaleX: 1.08, scaleY: 1.08,
+        duration: 150, yoyo: true,
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  LEVEL BANNER
+  // ══════════════════════════════════════════════════════════
+  _showLevelBanner() {
+    const lvl = LEVELS[this.levelIdx];
+    if (!lvl) { this._showWinScreen(); return; }
+
+    // Dark overlay
+    const ov = this.add.graphics().setDepth(20);
+    ov.fillStyle(0x000000, 0.7);
+    ov.fillRect(0, 0, W, H);
+
+    // Banner
+    const bx = 30, by = H/2 - 100, bw = W-60, bh = 200;
+    ov.fillStyle(C.hud, 1);
+    ov.fillRoundedRect(bx, by, bw, bh, 20);
+    ov.lineStyle(3, C.gold, 1);
+    ov.strokeRoundedRect(bx, by, bw, bh, 20);
+
+    const em = ['🍕','🍕🍕','🍕🍕🍕','🎉'][Math.min(this.levelIdx, 3)];
+    const txt1 = this.add.text(W/2, by + 30, em, {
+      fontSize: '36px', fontFamily: 'Arial',
+    }).setOrigin(0.5, 0).setDepth(21);
+
+    const txt2 = this.add.text(W/2, by + 80, '¡Nivel Superado! 🎊', {
+      fontSize: '22px', fontFamily: 'Arial Black', color: '#FFD700',
+      stroke: '#6B0000', strokeThickness: 4,
+    }).setOrigin(0.5, 0).setDepth(21);
+
+    const txt3 = this.add.text(W/2, by + 116, lvl.title, {
+      fontSize: '18px', fontFamily: 'Arial Black', color: '#FFCC80',
+    }).setOrigin(0.5, 0).setDepth(21);
+
+    // Continue button
+    const cbg = this.add.graphics().setDepth(21);
+    cbg.fillStyle(C.btnGreen, 1);
+    cbg.fillRoundedRect(W/2-90, by+155, 180, 44, 22);
+
+    const ctxt = this.add.text(W/2, by+177, '¡Continuar! →', {
+      fontSize: '16px', fontFamily: 'Arial Black', color: '#FFFFFF',
+      stroke: '#003300', strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(21);
+
+    const czone = this.add.zone(W/2, by+177, 180, 44).setInteractive({ cursor: 'pointer' }).setDepth(22);
+    czone.on('pointerdown', () => {
+      [ov, txt1, txt2, txt3, cbg, ctxt, czone].forEach(o => o.destroy());
+      this._nextRound();
+    });
+
+    // Entrance animation
+    const group = [txt1, txt2, txt3, cbg, ctxt];
+    group.forEach(o => { o.setAlpha(0); o.y += 20; });
+    this.tweens.add({
+      targets: group,
+      alpha: 1, y: '-=20',
+      duration: 400, ease: 'Back.Out', delay: 100,
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  WIN SCREEN
+  // ══════════════════════════════════════════════════════════
+  _showWinScreen() {
+    this.cameras.main.fadeOut(400, 0, 0, 0);
+    this.time.delayedCall(400, () => {
+      this.scene.start('WinScene', { score: this.score, stars: this.stars });
+    });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+class WinScene extends Phaser.Scene {
+  constructor() { super({ key: 'WinScene' }); }
+
+  init(data) {
+    this.finalScore = data.score || 0;
+    this.finalStars = data.stars || 0;
+  }
+
+  create() {
+    // Gradient
+    const g = this.add.graphics();
+    for (let y = 0; y < H; y++) {
+      const t = y/H;
+      const r = Math.round(Phaser.Math.Linear(20, 10, t));
+      const gg = Math.round(Phaser.Math.Linear(80, 40, t));
+      const b = Math.round(Phaser.Math.Linear(20, 5, t));
+      g.fillStyle(Phaser.Display.Color.GetColor(r, gg, b), 1);
+      g.fillRect(0, y, W, 1);
+    }
+
+    // Confetti rain
+    for (let i = 0; i < 30; i++) {
+      const em = ['🍕','⭐','🎉','✨','🌟'][rnd(0,4)];
+      const c = this.add.text(rnd(10, W-10), rnd(-100, H), em, {
+        fontSize: `${rnd(14,32)}px`,
+      }).setAlpha(rnd(40,100)/100);
+      this.tweens.add({
+        targets: c, y: `+=${H + 100}`,
+        duration: rnd(3000, 6000),
+        repeat: -1,
+        delay: rnd(0, 3000),
+      });
+    }
+
+    // Trophy
+    this.add.text(W/2, 100, '🏆', { fontSize: '80px' }).setOrigin(0.5);
+    this.tweens.add({
+      targets: this.add.text(W/2, 100, '🏆', { fontSize: '80px' }).setOrigin(0.5),
+      scaleX: 1.1, scaleY: 1.1, duration: 800, yoyo: true, repeat: -1,
+    });
+
+    this.add.text(W/2, 200, '¡Pizzería Completada!', {
+      fontSize: '26px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B0000', strokeThickness: 5,
+      align: 'center', wordWrap: { width: W - 60 },
+    }).setOrigin(0.5);
+
+    this.add.text(W/2, 250, '¡Eres un experto en partes iguales! 🍕', {
+      fontSize: '14px', fontFamily: 'Arial', color: '#FFCC80',
+      align: 'center', wordWrap: { width: W - 60 },
+    }).setOrigin(0.5);
+
+    // Score panel
+    const sp = this.add.graphics();
+    sp.fillStyle(0x000000, 0.5);
+    sp.fillRoundedRect(50, 280, W-100, 120, 16);
+    sp.lineStyle(3, C.gold, 1);
+    sp.strokeRoundedRect(50, 280, W-100, 120, 16);
+
+    this.add.text(W/2, 304, `Puntuación Final`, {
+      fontSize: '14px', fontFamily: 'Arial', color: '#FFCC80',
+    }).setOrigin(0.5);
+    this.add.text(W/2, 330, `${this.finalScore} pts`, {
+      fontSize: '38px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B0000', strokeThickness: 5,
+    }).setOrigin(0.5);
+    this.add.text(W/2, 376, '⭐'.repeat(Math.min(this.finalStars, 10)), {
+      fontSize: '22px',
+    }).setOrigin(0.5);
+
+    // Skills recap
+    const skills = [
+      '✅ Mitades (½) — 2 partes iguales',
+      '✅ Tercios (⅓) — 3 partes iguales',
+      '✅ Cuartos (¼) — 4 partes iguales',
+    ];
+    const recapBg = this.add.graphics();
+    recapBg.fillStyle(0x000000, 0.4);
+    recapBg.fillRoundedRect(30, 418, W-60, 104, 12);
+
+    skills.forEach((s, i) => {
+      this.add.text(W/2, 432 + i*30, s, {
+        fontSize: '13px', fontFamily: 'Arial', color: '#FFFFFF',
+      }).setOrigin(0.5);
+    });
+
+    // Play again button
+    const pbg = this.add.graphics();
+    pbg.fillStyle(C.btnRed, 1);
+    pbg.fillRoundedRect(W/2-110, 548, 220, 58, 29);
+    pbg.lineStyle(3, C.gold, 1);
+    pbg.strokeRoundedRect(W/2-110, 548, 220, 58, 29);
+
+    const ptxt = this.add.text(W/2, 577, '¡Jugar de Nuevo! 🍕', {
+      fontSize: '18px', fontFamily: 'Arial Black',
+      color: '#FFD700', stroke: '#6B0000', strokeThickness: 4,
+    }).setOrigin(0.5);
+
+    const pzone = this.add.zone(W/2, 577, 220, 58).setInteractive({ cursor: 'pointer' });
+    pzone.on('pointerdown', () => {
+      this.cameras.main.fadeOut(300, 0,0,0);
+      this.time.delayedCall(300, () => this.scene.start('TitleScene'));
+    });
+    pzone.on('pointerover', () => {
+      this.tweens.add({ targets: [pbg, ptxt], scaleX: 1.04, scaleY: 1.04, duration: 80 });
+    });
+    pzone.on('pointerout', () => {
+      this.tweens.add({ targets: [pbg, ptxt], scaleX: 1, scaleY: 1, duration: 80 });
+    });
+
+    // Home button
+    const hbg = this.add.graphics();
+    hbg.fillStyle(C.hud, 1);
+    hbg.fillRoundedRect(W/2-80, 622, 160, 44, 22);
+    hbg.lineStyle(2, C.gold, 1);
+    hbg.strokeRoundedRect(W/2-80, 622, 160, 44, 22);
+
+    const htxt = this.add.text(W/2, 644, '🏠 Menú Principal', {
+      fontSize: '14px', fontFamily: 'Arial Black', color: '#FFCC80',
+    }).setOrigin(0.5);
+
+    const hzone = this.add.zone(W/2, 644, 160, 44).setInteractive({ cursor: 'pointer' });
+    hzone.on('pointerdown', () => {
+      this.cameras.main.fadeOut(300, 0,0,0);
+      this.time.delayedCall(300, () => {
+        // Send message to parent if inside iframe
+        try { window.parent.postMessage({ type: 'gameComplete', score: this.finalScore }, '*'); } catch(e){}
+        this.scene.start('TitleScene');
+      });
+    });
+
+    this.cameras.main.fadeIn(500, 0,0,0);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PHASER CONFIG
+// ══════════════════════════════════════════════════════════════
+const config = {
+  type: Phaser.AUTO,
+  width: W,
+  height: H,
+  backgroundColor: '#1A0A00',
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  scene: [BootScene, TitleScene, GameScene, WinScene],
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
